@@ -36,10 +36,47 @@ jobs:
       - name: 构建并打包（vite + cargo + NSIS）
         run: npm run tauri build
 
-      - name: 上传发布产物
+      - name: 上传发布产物（GitHub Releases）
         uses: softprops/action-gh-release@v2
         with:
           files: |
             src-tauri/target/release/bundle/nsis/*.exe
             src-tauri/target/release/dsh-desktop.exe
           generate_release_notes: true
+
+      - name: 发布到 GitCode Releases
+        if: ${{ secrets.GITCODE_TOKEN != '' }}
+        env:
+          GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
+          GITCODE_REPO: Sunflower816/deepseek-harness-kit
+          TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -e
+          BASE="https://gitcode.com/api/v5/repos/$GITCODE_REPO"
+          # 仓库不存在则跳过（提示配置仓库）
+          if ! curl -sS -o /dev/null -w "%{http_code}" "$BASE/contents/?ref=main" \
+              | grep -qE "200|404"; then
+            echo "无法访问 GitCode 仓库 $GITCODE_REPO，跳过 GitCode 发布"
+            exit 0
+          fi
+          if curl -sS -o /dev/null -w "%{http_code}" "$BASE/releases/tags/$TAG?access_token=$GITCODE_TOKEN" \
+              | grep -q "200"; then
+            echo "GitCode Release $TAG 已存在，跳过创建"
+          else
+            curl -sS -X POST "$BASE/releases?access_token=$GITCODE_TOKEN" \
+              -F "tag_name=$TAG" \
+              -F "name=$TAG" \
+              -F "body=自动发布：DeepSeek Harness 桌面端 $TAG" \
+              -o /tmp/gitcode-release.json \
+              -w "GitCode 创建 Release: HTTP %{http_code}\n"
+            echo "GitCode Release $TAG 创建完成"
+          fi
+          # 上传安装包
+          for f in src-tauri/target/release/bundle/nsis/*.exe src-tauri/target/release/dsh-desktop.exe; do
+            [ -f "$f" ] || continue
+            code=$(curl -sS -o /dev/null -w "%{http_code}" -X POST \
+              "$BASE/releases/$TAG/attach_files?access_token=$GITCODE_TOKEN" \
+              -F "file=@$f")
+            echo "GitCode 上传 $(basename "$f"): HTTP $code"
+          done
