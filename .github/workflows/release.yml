@@ -54,29 +54,36 @@ jobs:
         run: |
           set -e
           BASE="https://gitcode.com/api/v5/repos/$GITCODE_REPO"
-          # 仓库不存在则跳过（提示配置仓库）
-          if ! curl -sS -o /dev/null -w "%{http_code}" "$BASE/contents/?ref=main" \
-              | grep -qE "200|404"; then
-            echo "无法访问 GitCode 仓库 $GITCODE_REPO，跳过 GitCode 发布"
-            exit 0
-          fi
-          if curl -sS -o /dev/null -w "%{http_code}" "$BASE/releases/tags/$TAG?access_token=$GITCODE_TOKEN" \
-              | grep -q "200"; then
-            echo "GitCode Release $TAG 已存在，跳过创建"
+          # 创建/复用 Release
+          code=$(curl -sS -o /dev/null -w "%{http_code}" "$BASE/releases/tags/$TAG?access_token=$GITCODE_TOKEN")
+          if [ "$code" = "200" ]; then
+            echo "GitCode Release $TAG 已存在"
           else
             curl -sS -X POST "$BASE/releases?access_token=$GITCODE_TOKEN" \
-              -F "tag_name=$TAG" \
-              -F "name=$TAG" \
+              -F "tag_name=$TAG" -F "name=$TAG" \
               -F "body=自动发布：DeepSeek Harness 桌面端 $TAG" \
               -o /tmp/gitcode-release.json \
               -w "GitCode 创建 Release: HTTP %{http_code}\n"
             echo "GitCode Release $TAG 创建完成"
           fi
-          # 上传安装包
+          # 上传安装包（预签名 OBS URL + PUT）
           for f in src-tauri/target/release/bundle/nsis/*.exe src-tauri/target/release/dsh-desktop.exe; do
             [ -f "$f" ] || continue
-            code=$(curl -sS -o /dev/null -w "%{http_code}" -X POST \
-              "$BASE/releases/$TAG/attach_files?access_token=$GITCODE_TOKEN" \
-              -F "file=@$f")
-            echo "GitCode 上传 $(basename "$f"): HTTP $code"
+            fname="$(basename "$f")"
+            python - "$GITCODE_TOKEN" "$GITCODE_REPO" "$TAG" "$fname" "$f" <<'PY'
+import json, os, sys, urllib.error, urllib.request
+token, repo, tag, fname, fpath = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5]
+base = f"https://gitcode.com/api/v5/repos/{repo}"
+with urllib.request.urlopen(f"{base}/releases/{tag}/upload_url?access_token={token}&file_name={fname}") as r:
+    data = json.load(r)
+with open(fpath, "rb") as fp:
+    body = fp.read()
+req = urllib.request.Request(data["url"], data=body, method="PUT", headers=data["headers"])
+try:
+    with urllib.request.urlopen(req) as r:
+        print(f"GitCode 上传 {fname}: HTTP {r.status}")
+except urllib.error.HTTPError as e:
+    print(f"GitCode 上传 {fname} 失败: HTTP {e.code} {e.read()[:300]}")
+    sys.exit(1)
+PY
           done
