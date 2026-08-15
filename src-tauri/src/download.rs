@@ -23,11 +23,13 @@ pub fn download(
     if let Some(d) = dest.parent() {
         std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
     }
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_secs(30))
-        .timeout_read(Duration::from_secs(120))
-        .user_agent("dsh-desktop/0.1.0")
-        .build();
+    let agent = crate::process::apply_proxy(
+        ureq::AgentBuilder::new()
+            .timeout_connect(Duration::from_secs(30))
+            .timeout_read(Duration::from_secs(120))
+            .user_agent("dsh-desktop/0.1.0"),
+    )
+    .build();
     let resp = agent
         .get(url)
         .call()

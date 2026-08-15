@@ -16,8 +16,8 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["custom-protocol"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-# ureq 2.9 pinned; default features = rustls TLS + gzip (auto-wired)
-ureq = { version = "=2.9.1" }
+# ureq 2.9 pinned; default features = rustls TLS + gzip; proxy-from-env 读取环境代理
+ureq = { version = "=2.9.1", features = ["proxy-from-env"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
 
 [profile.release]

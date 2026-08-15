@@ -108,6 +108,62 @@ pub fn run_stream(
     }
 }
 
+/// 探测系统代理：优先环境变量，其次 Windows 注册表（IE/系统代理设置）
+pub fn system_proxy() -> Option<String> {
+    for v in ["HTTPS_PROXY", "https_proxy", "HTTP_PROXY", "http_proxy"] {
+        if let Ok(p) = std::env::var(v) {
+            let p = p.trim();
+            if !p.is_empty() {
+                return Some(normalize_proxy(p));
+            }
+        }
+    }
+    #[cfg(windows)]
+    {
+        let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings";
+        let enabled = std::process::Command::new("reg")
+            .args(["query", key, "/v", "ProxyEnable"])
+            .output()
+            .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+            .unwrap_or_default();
+        if enabled.contains("0x1") {
+            if let Ok(out) = std::process::Command::new("reg")
+                .args(["query", key, "/v", "ProxyServer"])
+                .output()
+            {
+                let text = String::from_utf8_lossy(&out.stdout);
+                for line in text.lines() {
+                    if let Some(idx) = line.find("REG_SZ") {
+                        let v = line[idx + "REG_SZ".len()..].trim();
+                        if !v.is_empty() {
+                            return Some(normalize_proxy(v));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn normalize_proxy(p: &str) -> String {
+    if p.contains("://") {
+        p.to_string()
+    } else {
+        format!("http://{}", p)
+    }
+}
+
+/// 为 AgentBuilder 应用系统代理（若配置了代理则走代理）
+pub fn apply_proxy(builder: ureq::AgentBuilder) -> ureq::AgentBuilder {
+    if let Some(p) = system_proxy() {
+        if let Ok(proxy) = ureq::Proxy::new(p) {
+            return builder.proxy(proxy);
+        }
+    }
+    builder
+}
+
 /// 执行命令并捕获 stdout（trim 后返回）
 pub fn run_capture(
     prog: &str,

@@ -31,55 +31,133 @@ pub fn has_update(latest: &str, current: &str) -> bool {
     version_tuple(latest) > version_tuple(current)
 }
 
+/// 是否为有效的版本 tag（v0.1.0 / 0.1.0）
+fn looks_like_version(tag: &str) -> bool {
+    let t = tag.trim_start_matches('v');
+    let parts: Vec<&str> = t.split('.').collect();
+    parts.len() >= 2
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+}
+
+/// 工作流产出的安装包文件名是确定的：dsh-desktop_{版本}_x64-setup.exe
+fn asset_name_for(tag: &str) -> String {
+    format!("dsh-desktop_{}_x64-setup.exe", tag.trim_start_matches('v'))
+}
+
+fn agent() -> ureq::Agent {
+    crate::process::apply_proxy(
+        ureq::AgentBuilder::new()
+            .timeout(Duration::from_secs(10))
+            .timeout_connect(Duration::from_secs(15))
+            .user_agent("dsh-desktop-update-check/1.0"),
+    )
+    .build()
+}
+
 /// 检查 GitHub Releases 最新版本
 pub fn check_update() -> UpdateInfo {
     let current = env!("CARGO_PKG_VERSION").to_string();
-    let mut info = UpdateInfo {
-        current,
-        ..Default::default()
-    };
 
-    let agent = ureq::AgentBuilder::new()
-        .timeout(Duration::from_secs(10))
-        .user_agent("dsh-desktop-update-check/1.0")
-        .build();
+    // 方式一：releases/latest 重定向拿 tag（避开 API 限流，走 github.com）
+    let latest_page = format!("https://github.com/{}/releases/latest", UPDATE_REPO);
+    let no_redirect = crate::process::apply_proxy(
+        ureq::AgentBuilder::new()
+            .redirects(0)
+            .timeout(Duration::from_secs(10))
+            .user_agent("dsh-desktop-update-check/1.0"),
+    )
+    .build();
+    if let Ok(resp) = no_redirect.get(&latest_page).call() {
+        if let Some(loc) = resp.header("location") {
+            // 仓库还没有任何发布：/releases/latest -> /releases
+            if loc.trim_end_matches('/').ends_with("/releases") {
+                return UpdateInfo {
+                    current,
+                    ..Default::default()
+                };
+            }
+            let tag = loc.rsplit('/').next().unwrap_or("").trim().to_string();
+            if looks_like_version(&tag) {
+                let asset_name = asset_name_for(&tag);
+                let asset_url = format!(
+                    "https://github.com/{}/releases/download/{}/{}",
+                    UPDATE_REPO, tag, asset_name
+                );
+                // 验证安装包确实存在（HEAD）
+                let asset_exists = agent().head(&asset_url).call().is_ok();
+                return UpdateInfo {
+                    current: current.clone(),
+                    latest: Some(tag.clone()),
+                    has_update: has_update(&tag, &current),
+                    release_url: Some(format!(
+                        "https://github.com/{}/releases/tag/{}",
+                        UPDATE_REPO, tag
+                    )),
+                    asset_name: Some(asset_name),
+                    asset_url: if asset_exists { Some(asset_url) } else { None },
+                    error: None,
+                };
+            }
+        }
+    }
+
+    // 方式二：GitHub API（兜底）
     let api = format!("https://api.github.com/repos/{}/releases/latest", UPDATE_REPO);
-    let resp = match agent.get(&api).call() {
+    let resp = match agent().get(&api).call() {
         Ok(r) => r,
         Err(ureq::Error::Status(404, _)) => {
             // 还没有发布任何版本
-            return info;
+            return UpdateInfo {
+                current,
+                ..Default::default()
+            };
         }
         Err(e) => {
-            info.error = Some(format!("无法连接更新服务器：{}", e));
-            return info;
+            return UpdateInfo {
+                current,
+                error: Some(format!("无法连接更新服务器：{}", e)),
+                ..Default::default()
+            };
         }
     };
     let body = match resp.into_string() {
         Ok(b) => b,
         Err(e) => {
-            info.error = Some(format!("读取更新数据失败：{}", e));
-            return info;
+            return UpdateInfo {
+                current,
+                error: Some(format!("读取更新数据失败：{}", e)),
+                ..Default::default()
+            };
         }
     };
     let json: serde_json::Value = match serde_json::from_str(&body) {
         Ok(j) => j,
         Err(_) => {
-            info.error = Some("更新服务器返回异常数据".into());
-            return info;
+            return UpdateInfo {
+                current,
+                error: Some("更新服务器返回异常数据".into()),
+                ..Default::default()
+            };
         }
     };
 
-    info.latest = json.get("tag_name").and_then(|t| t.as_str()).map(|s| s.to_string());
+    let mut info = UpdateInfo {
+        current,
+        ..Default::default()
+    };
+    info.latest = json
+        .get("tag_name")
+        .and_then(|t| t.as_str())
+        .map(|s| s.to_string());
     info.release_url = json
         .get("html_url")
         .and_then(|u| u.as_str())
         .map(|s| s.to_string());
-
     if let Some(assets) = json.get("assets").and_then(|a| a.as_array()) {
         for a in assets {
             let n = a.get("name").and_then(|x| x.as_str()).unwrap_or("");
-            // 优先 x64 安装包
             if n.contains("x64") && n.ends_with("setup.exe") {
                 info.asset_name = Some(n.to_string());
                 info.asset_url = a
@@ -90,14 +168,13 @@ pub fn check_update() -> UpdateInfo {
             }
         }
     }
-
     if let Some(latest) = &info.latest {
         info.has_update = has_update(latest, &info.current);
     }
     info
 }
 
-/// 下载更新安装包（直连失败时回退国内加速镜像）
+/// 下载更新安装包（直连失败时依次回退：系统代理、国内加速镜像）
 pub fn download_update(app: &AppHandle, url: &str, name: &str) -> Result<String, String> {
     let dest = crate::state::dl_dir().join(name);
     if let Some(d) = dest.parent() {
