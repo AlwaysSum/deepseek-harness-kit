@@ -68,6 +68,16 @@ npm run tauri build  # 打包（NSIS 安装包输出到 src-tauri/target/release
 - 首次进入 Harness 页面后，需在页面内完成模型 API Key 等配置（与直接使用 DeepSeek Harness 相同）。
 - 应用退出时默认自动停止服务（可在设置中关闭，以便服务保持后台运行）。
 
+## 更新与发布
+
+- 侧边栏底部「检查更新」按钮：通过 GitHub Releases（`AlwaysSum/deepseek-harness-kit`）检测新版本，
+  发现新版本后可直接下载安装包并运行安装程序；自动使用系统代理（FlClash 等）与国内加速镜像。
+- 发布新版本（GitHub Actions 自动构建并上传产物）：
+  1. 同步修改版本号：`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`；
+  2. `git tag vX.Y.Z && git push origin vX.Y.Z`；
+  3. 等待 `.github/workflows/release.yml` 完成（Windows 上 vite + cargo + NSIS 打包），
+     安装包 `dsh-desktop_X.Y.Z_x64-setup.exe` 自动上传到对应 Release。
+
 ## 国内网络构建提示（仅对源码构建者）
 
 - crates.io 直连较慢：建议在 `%USERPROFILE%\.cargo\config.toml` 配置 rsproxy 稀疏镜像
