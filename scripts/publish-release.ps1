@@ -38,6 +38,9 @@ function Write-Step { param([string]$Msg) Write-Host "[发布] $Msg" -Foreground
 function Write-Ok { param([string]$Msg) Write-Host "[发布] $Msg" -ForegroundColor Green }
 function Write-Warn { param([string]$Msg) Write-Host "[发布] $Msg" -ForegroundColor Yellow }
 
+# .NET HttpClient（GitCode OBS 上传用）
+Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue
+
 # ---------- curl 工具 ----------
 $curlPath = (Get-Command curl.exe -ErrorAction SilentlyContinue).Source
 if (-not $curlPath) { $curlPath = 'C:\Windows\System32\curl.exe' }
@@ -185,15 +188,27 @@ function Publish-GitCode {
         else { Start-Sleep -Seconds 2 }
       }
       if (-not $up) { break }
-      $hdr = @()
-      foreach ($k in $up.headers.PSObject.Properties.Name) {
-        $hdr += '-H'
-        $hdr += "$k`: $($up.headers.$k)"
-      }
       # 2) PUT 到 OBS（成功返回 203）
-      $r = Call-Curl @('-X', 'PUT', @($hdr), '--data-binary', "@$asset", $up.url)
-      if ($r.Code -notin @(200, 201, 203)) {
-        Write-Warn "GitCode 上传 $name 重试（HTTP $($r.Code)）…"
+      #    用 .NET HttpClient 发送：规避 PowerShell 原生参数传递差异，且自动使用系统代理
+      $http = New-Object System.Net.Http.HttpClient
+      try {
+        $http.Timeout = [TimeSpan]::FromSeconds(300)
+        $bytes = [System.IO.File]::ReadAllBytes($asset)
+        $content = New-Object System.Net.Http.ByteArrayContent (,$bytes)
+        foreach ($k in $up.headers.PSObject.Properties.Name) {
+          $ok = $content.Headers.TryAddWithoutValidation($k, [string]$up.headers.$k)
+        }
+        $resp = $http.PutAsync([Uri]$up.url, $content).GetAwaiter().GetResult()
+        $putCode = [int]$resp.StatusCode
+        $resp.Dispose()
+      } catch {
+        Write-Warn "GitCode 上传 $name 异常：$($_.Exception.Message)"
+        $putCode = 0
+      } finally {
+        $http.Dispose()
+      }
+      if ($putCode -notin @(200, 201, 203)) {
+        Write-Warn "GitCode 上传 $name 重试（HTTP $putCode）…"
         Start-Sleep -Seconds 3
         continue
       }

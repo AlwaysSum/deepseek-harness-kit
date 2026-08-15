@@ -72,11 +72,17 @@ npm run tauri build  # 打包（NSIS 安装包输出到 src-tauri/target/release
 
 - 侧边栏底部「检查更新」按钮：通过 GitHub Releases（`AlwaysSum/deepseek-harness-kit`）检测新版本，
   发现新版本后可直接下载安装包并运行安装程序；自动使用系统代理（FlClash 等）与国内加速镜像。
-- 发布新版本（GitHub Actions 自动构建并上传产物）：
-  1. 同步修改版本号：`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`；
-  2. `git tag vX.Y.Z && git push origin vX.Y.Z`；
-  3. 等待 `.github/workflows/release.yml` 完成（Windows 上 vite + cargo + NSIS 打包），
-     安装包 `dsh-desktop_X.Y.Z_x64-setup.exe` 自动上传到对应 Release。
+- 发布新版本（两种方式任选）：
+  - **本地脚本（推荐）**：`scripts/publish-release.ps1`，token 放环境变量，一键打 tag + 发布到 GitHub 与 GitCode：
+    ```powershell
+    $env:GITHUB_TOKEN = "github_pat_xxx"     # 可选，缺省则跳过 GitHub
+    $env:GITCODE_TOKEN = "xxx"               # 可选，缺省则跳过 GitCode
+    .\scripts\publish-release.ps1 -Build -TagAndPush
+    # 常用参数：-Version 0.2.0（默认读 tauri.conf.json）/-SkipGitHub /-SkipGitCode /-Proxy http://127.0.0.1:7890
+    ```
+  - **GitHub Actions 自动发布**：打 tag `v0.1.0` 后自动构建并发布到 GitHub；若在仓库
+    Settings → Secrets 配置了 `GITCODE_TOKEN`，则同步发布到 GitCode。
+- 版本号三处保持一致：`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`。
 
 ## 国内网络构建提示（仅对源码构建者）
 
