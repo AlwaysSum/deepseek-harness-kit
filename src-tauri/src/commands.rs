@@ -1,0 +1,259 @@
+//! Tauri 命令层。
+
+use crate::process::no_window;
+use crate::service::{find_pid_on_port, probe_http, service_url};
+use crate::state::{
+    data_dir, dsh_installed, dsh_version, node_home, node_version_ok, AppState, Settings,
+    DEFAULT_REGISTRY, NODE_VERSION,
+};
+use std::sync::atomic::Ordering;
+use tauri::State;
+
+#[derive(serde::Serialize)]
+pub struct NodeInfo {
+    pub present: bool,
+    pub version: Option<String>,
+    pub ok: bool,
+    pub managed: bool,
+}
+
+#[derive(serde::Serialize)]
+pub struct DshInfo {
+    pub ready: bool,
+    pub version: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+pub struct ServiceInfo {
+    pub running: bool,
+    pub url: String,
+    pub pid: Option<u32>,
+}
+
+#[derive(serde::Serialize)]
+pub struct Status {
+    pub node: NodeInfo,
+    pub dsh: DshInfo,
+    pub service: ServiceInfo,
+    pub data_dir: String,
+    pub settings: Settings,
+    pub busy: bool,
+    pub version: String,
+}
+
+#[tauri::command]
+pub fn get_status(state: State<AppState>) -> Status {
+    let settings = state.settings.lock().unwrap().clone();
+    let port = settings.port;
+
+    // --- Node ---
+    let mut node = match crate::process::run_capture("node", &["--version"], None, None) {
+        Ok(v) => NodeInfo {
+            present: true,
+            version: Some(v.clone()),
+            ok: node_version_ok(&v),
+            managed: false,
+        },
+        Err(_) => NodeInfo {
+            present: false,
+            version: None,
+            ok: false,
+            managed: false,
+        },
+    };
+    if !node.ok {
+        let managed_exe = node_home()
+            .join(format!("node-{}-win-x64", settings.node_version))
+            .join("node.exe");
+        if managed_exe.exists() {
+            if let Ok(v) =
+                crate::process::run_capture(managed_exe.to_str().unwrap(), &["--version"], None, None)
+            {
+                node = NodeInfo {
+                    present: true,
+                    version: Some(v),
+                    ok: true,
+                    managed: true,
+                };
+            }
+        }
+    }
+
+    // --- dsh 运行时（npx） ---
+    let dsh = DshInfo {
+        ready: dsh_installed(),
+        version: dsh_version(),
+    };
+
+    // --- 服务 ---
+    let running = probe_http(port);
+    let pid = state.service.lock().unwrap().as_ref().map(|h| h.pid);
+    let service = ServiceInfo {
+        running,
+        url: service_url(port),
+        pid: if running {
+            pid.or_else(|| find_pid_on_port(port))
+        } else {
+            None
+        },
+    };
+
+    Status {
+        node,
+        dsh,
+        service,
+        data_dir: data_dir().display().to_string(),
+        settings,
+        busy: state.busy.load(Ordering::SeqCst),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    }
+}
+
+#[tauri::command]
+pub async fn deploy(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    force: Option<bool>,
+) -> Result<(), String> {
+    let st = state.inner().clone();
+    let busy = st.busy.clone();
+    if busy.swap(true, Ordering::SeqCst) {
+        return Err("已有任务正在进行中，请稍候。".into());
+    }
+    let settings = st.settings.lock().unwrap().clone();
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        crate::deploy::deploy_impl(&app, &st, &settings, force.unwrap_or(false))
+    })
+    .await
+    .map_err(|e| format!("部署线程异常: {}", e))?;
+    busy.store(false, Ordering::SeqCst);
+    res
+}
+
+#[tauri::command]
+pub async fn start_service(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let st = state.inner().clone();
+    let busy = st.busy.clone();
+    if busy.swap(true, Ordering::SeqCst) {
+        return Err("已有任务正在进行中，请稍候。".into());
+    }
+    let settings = st.settings.lock().unwrap().clone();
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        crate::service::start_impl(&app, &st, &settings)
+    })
+    .await
+    .map_err(|e| format!("线程异常: {}", e))?;
+    busy.store(false, Ordering::SeqCst);
+    res
+}
+
+#[tauri::command]
+pub async fn stop_service(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+) -> Result<(), String> {
+    let st = state.inner().clone();
+    let busy = st.busy.clone();
+    if busy.swap(true, Ordering::SeqCst) {
+        return Err("已有任务正在进行中，请稍候。".into());
+    }
+    let settings = st.settings.lock().unwrap().clone();
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        crate::service::stop_impl(&app, &st, &settings)
+    })
+    .await
+    .map_err(|e| format!("线程异常: {}", e))?;
+    busy.store(false, Ordering::SeqCst);
+    res
+}
+
+#[tauri::command]
+pub fn open_browser(url: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let mut cmd = std::process::Command::new("cmd");
+        cmd.args(["/C", "start", "", &url]);
+        no_window(&mut cmd);
+        cmd.status().map_err(|e| format!("打开浏览器失败: {}", e))?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let mut cmd = std::process::Command::new("xdg-open");
+        cmd.arg(&url);
+        cmd.status().map_err(|e| format!("打开浏览器失败: {}", e))?;
+        Ok(())
+    }
+}
+
+#[tauri::command]
+pub fn get_settings(state: State<AppState>) -> Settings {
+    state.settings.lock().unwrap().clone()
+}
+
+#[tauri::command]
+pub fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), String> {
+    let mut s = settings;
+    if s.registry.trim().is_empty() {
+        s.registry = DEFAULT_REGISTRY.into();
+    }
+    if !s.registry.starts_with("http://") && !s.registry.starts_with("https://") {
+        return Err("镜像源必须是 http(s) 地址。".into());
+    }
+    s.port = s.port.clamp(1, 65535);
+    if s.node_version.trim().is_empty() {
+        s.node_version = NODE_VERSION.into();
+    }
+    crate::state::save_settings(&s)?;
+    *state.settings.lock().unwrap() = s;
+    Ok(())
+}
+
+/// 检查 GitHub Releases 是否有新版本
+#[tauri::command]
+pub fn check_update() -> crate::update::UpdateInfo {
+    crate::update::check_update()
+}
+
+/// 下载更新安装包（长任务，推送 update:download 进度）
+#[tauri::command]
+pub async fn download_update(
+    app: tauri::AppHandle,
+    state: State<'_, AppState>,
+    asset_url: String,
+    asset_name: String,
+) -> Result<String, String> {
+    let st = state.inner().clone();
+    let busy = st.busy.clone();
+    if busy.swap(true, Ordering::SeqCst) {
+        return Err("已有任务正在进行中，请稍候。".into());
+    }
+    let res = tauri::async_runtime::spawn_blocking(move || {
+        crate::update::download_update(&app, &asset_url, &asset_name)
+    })
+    .await
+    .map_err(|e| format!("线程异常: {}", e))?;
+    busy.store(false, Ordering::SeqCst);
+    res
+}
+
+/// 打开文件（运行安装程序等）
+#[tauri::command]
+pub fn open_file(path: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        let mut cmd = std::process::Command::new(&path);
+        no_window(&mut cmd);
+        cmd.spawn()
+            .map_err(|e| format!("无法启动 {}: {}", path, e))?;
+        Ok(())
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        Ok(())
+    }
+}

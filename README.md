@@ -1,0 +1,78 @@
+# DeepSeek Harness 桌面端（dsh-desktop）
+
+一个基于 **Tauri 2** 的 Windows 桌面应用：一键部署并运行
+[DeepSeek Harness](https://gitcode.com/gh_mirrors/de/deepseek-harness)（gitcode 镜像仓库），
+免去手动装环境、克隆、安装依赖、构建的繁琐步骤。
+
+## 功能
+
+- **侧边栏单一入口**：点击侧边栏菜单在「控制台」与「Harness 页面」之间切换。
+- **一键部署**：自动完成
+  1. Node.js 检测（系统 Node 需 `^22.19 || >=24`，不满足或缺失时自动下载便携版 Node）；
+  2. 通过 **`npx --yes @deepseek-ai/dsh web --help`** 获取官方发布的 DeepSeek Harness 运行时（预编译 npm 包，无需克隆源码、无需 pnpm、无需构建）；
+  3. （可选）自动启动服务。
+- **一键启动 / 一键停止**：后台运行 `npx --yes @deepseek-ai/dsh web --port <设置端口>`，等待端口就绪；停止时结束整棵进程树。
+- **内嵌页面**：服务运行中时，中间面板直接内嵌 DeepSeek Harness 的 Web UI；若系统已部署且正在运行，打开应用即直接进入页面。
+- 运行日志实时滚动显示；设置可配置镜像源（默认 npmmirror）、端口（会传递给 `dsh web --port`）、退出是否停止服务等。
+
+## 目录结构
+
+```
+├── index.html              # 前端入口
+├── src/                    # 前端（原生 JS + Vite）
+│   ├── main.js
+│   └── styles.css
+├── src-tauri/              # Tauri / Rust 后端
+│   ├── src/
+│   │   ├── main.rs         # 入口
+│   │   ├── lib.rs          # 应用装配、退出清理
+│   │   ├── commands.rs     # Tauri 命令（get_status / deploy / start / stop …）
+│   │   ├── deploy.rs       # 一键部署编排（Node + npx 运行时）
+│   │   ├── service.rs      # 服务启停、端口探测
+│   │   ├── process.rs      # 进程执行、日志流
+│   │   ├── download.rs     # 下载与解压
+│   │   └── state.rs        # 设置、路径、运行时检测
+│   ├── tauri.conf.json
+│   └── icons/              # 应用图标（scripts/gen-icons.ps1 生成）
+└── scripts/gen-icons.ps1
+```
+
+## 本地开发
+
+前置：Node.js ≥ 18（构建打包需要 Rust MSVC 工具链）、Windows 10/11（自带 WebView2）。
+
+项目已内置 `.npmrc`（registry 指向 npmmirror），并同时提供 `package-lock.json` 与 `pnpm-lock.yaml`，
+`npm` 或 `pnpm` 均可直接安装：
+
+```sh
+npm install        # 或 pnpm install
+npm run tauri dev  # 开发模式
+npm run tauri build  # 打包（NSIS 安装包输出到 src-tauri/target/release/bundle/）
+```
+
+## 部署流程说明
+
+- 数据目录：`%LOCALAPPDATA%\DSHDesktop\`
+  - `node/` — 便携版 Node.js
+  - `downloads/` — 下载缓存
+  - `settings.json` — 应用设置
+  - `dsh.installed` / `dsh.version` — 部署标记
+- 运行时来源：npm 上的官方包 `@deepseek-ai/dsh`（`npx --yes @deepseek-ai/dsh web --port <port>`），
+  缓存于 npm 的 npx 缓存目录（`%LOCALAPPDATA%\npm-cache\_npx`）。
+- 服务地址：`http://127.0.0.1:<设置端口>`（默认 3080，可在设置中修改并传递给 `--port`）
+- 二进制下载源：npmmirror（`registry.npmmirror.com/-/binary`），Node 失败时回退 nodejs.org。
+
+## 注意事项
+
+- 部署过程首次耗时较长（下载 ~75MB 工具 + 安装数百个 npm 包 + 全量构建），请耐心等待日志完成。
+- 首次进入 Harness 页面后，需在页面内完成模型 API Key 等配置（与直接使用 DeepSeek Harness 相同）。
+- 应用退出时默认自动停止服务（可在设置中关闭，以便服务保持后台运行）。
+
+## 国内网络构建提示（仅对源码构建者）
+
+- crates.io 直连较慢：建议在 `%USERPROFILE%\.cargo\config.toml` 配置 rsproxy 稀疏镜像
+  （`sparse+https://rsproxy.cn/index/`）。
+- Tauri 打包 NSIS 时会从 GitHub 下载 NSIS 工具链，国内会超时；可提前将
+  `nsis-3.11.zip` 与 `nsis_tauri_utils.dll` 放入 `%LOCALAPPDATA%\tauri\NSIS\`（SHA1 校验，
+  需保持官方文件一致），打包器检测到文件齐全后会自动跳过下载。
+- 仓库依赖全部来自 npm registry（无 GitHub 依赖），部署时使用 npmmirror 镜像即可。

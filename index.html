@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>DeepSeek Harness 桌面端</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- 侧边栏：控制台 + DeepSeek Harness 两个入口 -->
+      <aside id="sidebar">
+        <div class="logo" title="DeepSeek Harness">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="5.5" r="2.2" />
+            <circle cx="4.5" cy="17.5" r="2.2" />
+            <circle cx="19.5" cy="17.5" r="2.2" />
+            <circle cx="12" cy="14" r="1.6" />
+            <path d="M12 7.7 L4.8 15.6 M12 7.7 L19.2 15.6 M6.2 17 L10.6 15 M17.8 17 L13.4 15" />
+          </svg>
+        </div>
+        <nav id="nav">
+          <button id="nav-console" class="nav-item" title="控制台">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4" width="18" height="13" rx="2" />
+              <path d="M7 9 l2 2 -2 2 M12 13 h5" />
+              <path d="M5 20 h14" />
+            </svg>
+            <span>控制台</span>
+          </button>
+          <button id="nav-harness" class="nav-item" title="DeepSeek Harness">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="18" height="18" rx="3" />
+              <circle cx="12" cy="12" r="3" />
+              <path d="M12 9 V3 M12 21 V15 M9 12 H3 M21 12 H15" />
+            </svg>
+            <span>DeepSeek<br />Harness</span>
+          </button>
+        </nav>
+        <div class="sidebar-bottom">
+          <button id="btn-sidebar-settings" class="side-btn" title="设置">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+          </button>
+          <button id="btn-sidebar-update" class="side-btn" title="检查更新">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M21 12a9 9 0 1 1-2.64-6.36" />
+              <path d="M21 3v6h-6" />
+            </svg>
+          </button>
+        </div>
+        <div class="sidebar-footer" id="sidebar-footer">v0.1.0</div>
+      </aside>
+
+      <main id="main">
+        <!-- 视图一：控制台（状态 / 部署 / 启动） -->
+        <section id="view-control" class="view active">
+          <header class="panel-header">
+            <div class="panel-title">
+              <h1>DeepSeek Harness</h1>
+              <p class="sub">一键部署 · 一键启动 · 本地运行（http://127.0.0.1:3080）</p>
+            </div>
+            <div class="header-actions">
+              <span id="status-pill" class="pill pill-gray">检测中…</span>
+              <button id="btn-settings" class="icon-btn" title="设置">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
+              </button>
+            </div>
+          </header>
+
+          <div class="cards">
+            <div class="card" id="card-node">
+              <div class="card-head"><span class="card-label">Node.js 环境</span><span class="card-badge" id="badge-node">-</span></div>
+              <div class="card-detail" id="detail-node">检测中…</div>
+            </div>
+            <div class="card" id="card-dsh">
+              <div class="card-head"><span class="card-label">Harness 运行时（npx 官方包）</span><span class="card-badge" id="badge-dsh">-</span></div>
+              <div class="card-detail" id="detail-dsh">检测中…</div>
+            </div>
+            <div class="card" id="card-service">
+              <div class="card-head"><span class="card-label">Harness 服务</span><span class="card-badge" id="badge-service">-</span></div>
+              <div class="card-detail" id="detail-service">检测中…</div>
+            </div>
+          </div>
+
+          <div class="action-area">
+            <button id="btn-primary" class="btn-primary" disabled>检测中…</button>
+            <button id="btn-secondary" class="btn-secondary" hidden>重新部署</button>
+          </div>
+
+          <div class="log-console">
+            <div class="log-head">运行日志</div>
+            <pre id="log"></pre>
+          </div>
+        </section>
+
+        <!-- 视图二：DeepSeek Harness 页面（iframe 内嵌） -->
+        <section id="view-page" class="view">
+          <div class="page-toolbar">
+            <span class="page-status-dot" id="page-dot"></span>
+            <span class="page-url" id="page-url">http://127.0.0.1:3080</span>
+            <span class="toolbar-spacer"></span>
+            <button id="btn-refresh" class="btn-mini">刷新</button>
+            <button id="btn-open-browser" class="btn-mini">在浏览器打开</button>
+            <button id="btn-back" class="btn-mini">返回控制台</button>
+          </div>
+          <div class="page-wrap">
+            <iframe id="harness-frame" title="DeepSeek Harness"></iframe>
+            <div id="page-overlay" hidden>
+              <div class="overlay-box">
+                <h2>Harness 服务未运行</h2>
+                <p>服务地址不可访问，请返回控制台启动服务。</p>
+                <button id="btn-overlay-back" class="btn-primary">返回控制台</button>
+              </div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <!-- 设置弹窗 -->
+    <div id="modal-settings" class="modal" hidden>
+      <div class="modal-box">
+        <div class="modal-head">
+          <h2>设置</h2>
+          <button id="btn-close-settings" class="icon-btn">✕</button>
+        </div>
+        <div class="modal-body">
+          <label class="field">
+            <span>npm 镜像源（用于获取运行时）</span>
+            <input id="set-registry" type="text" spellcheck="false" placeholder="https://registry.npmmirror.com" />
+          </label>
+          <label class="field">
+            <span>服务端口</span>
+            <input id="set-port" type="number" min="1" max="65535" />
+          </label>
+          <label class="field check">
+            <input id="set-auto-start" type="checkbox" />
+            <span>部署完成后自动启动服务</span>
+          </label>
+          <label class="field check">
+            <input id="set-stop-on-exit" type="checkbox" />
+            <span>退出应用时自动停止服务</span>
+          </label>
+          <label class="field">
+            <span>数据目录</span>
+            <input id="set-data-dir" type="text" readonly />
+          </label>
+        </div>
+        <div class="modal-foot">
+          <button id="btn-save-settings" class="btn-primary">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 更新弹窗 -->
+    <div id="modal-update" class="modal" hidden>
+      <div class="modal-box">
+        <div class="modal-head">
+          <h2>检查更新</h2>
+          <button id="btn-close-update" class="icon-btn">✕</button>
+        </div>
+        <div class="modal-body">
+          <p id="update-text" class="update-text">正在检查更新…</p>
+          <div class="update-progress" id="update-progress" hidden>
+            <pre id="update-log" class="update-log"></pre>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button id="btn-update-cancel" class="btn-secondary">关闭</button>
+          <button id="btn-update-action" class="btn-primary" hidden>下载并安装</button>
+        </div>
+      </div>
+    </div>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>

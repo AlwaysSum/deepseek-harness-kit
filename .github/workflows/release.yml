@@ -1,0 +1,45 @@
+name: 发布 Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: 构建并发布
+    runs-on: windows-latest
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装 Rust 工具链
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Rust 依赖缓存
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: 安装依赖
+        run: npm ci
+
+      - name: 构建并打包（vite + cargo + NSIS）
+        run: npm run tauri build
+
+      - name: 上传发布产物
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/dsh-desktop.exe
+          generate_release_notes: true
