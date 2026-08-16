@@ -82,7 +82,9 @@ if ($Build) {
 
 # ---------- 定位产物 ----------
 $Assets = @()
-$Setup = Get-ChildItem (Join-Path $RepoRoot "src-tauri\target\release\bundle\nsis\*_x64-setup.exe") -ErrorAction SilentlyContinue | Select-Object -First 1
+$Setup = Get-ChildItem (Join-Path $RepoRoot "src-tauri\target\release\bundle\nsis\*_x64-setup.exe") -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like "*_${Version}_*" } |
+    Select-Object -First 1
 if ($Setup) { $Assets += $Setup.FullName }
 $Portable = Join-Path $RepoRoot 'src-tauri\target\release\dsh-desktop.exe'
 if (Test-Path $Portable) { $Assets += $Portable }
