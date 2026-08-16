@@ -81,6 +81,14 @@ window.__ModuleLoader__.load({
       ".dfx-btn{cursor:pointer;border:1px solid var(--dsw-alias-border-l2,#343b48);background:none;color:var(--dsw-alias-label-primary,#eceff4);font:inherit;font-size:12px;border-radius:7px;padding:4px 12px}",
       ".dfx-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.06))}",
       ".dfx-btn-primary{border-color:var(--dsw-alias-state-business-primary,#4c8dff);color:#fff;background:var(--dsw-alias-state-business-primary,#4c8dff)}",
+      // keep-alive pane：切换 Tab 只隐藏不卸载，文件树状态不丢、不再重载
+      ".dfx-pane{flex:1;min-height:0;display:flex;flex-direction:column;width:100%}",
+      ".dfx-pane[hidden]{display:none}",
+      // 文件 Tab 与「对话」Tab 同款下划线样式（不覆盖宿主底色/边框/下划线），
+      // 仅保留：固定最大宽度 + 文本省略 + 右侧关闭按钮（真实 span，替代 ::after）
+      "button[role=\"tab\"][data-dfx-file]{max-width:168px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding-right:16px;box-sizing:border-box}",
+      ".dfx-tab-close{position:absolute;right:5px;top:50%;transform:translateY(-50%);font-size:10px;line-height:1;cursor:pointer;color:var(--dsw-alias-label-tertiary,#7d8592);user-select:none}",
+      ".dfx-tab-close:hover{color:var(--dsw-alias-label-primary,#eceff4)}",
     ].join("");
     const tagId = "@dsh-kit/plugin-file-explorer/styles";
     if (typeof document !== "undefined" && document.querySelector("style[data-plugin-css=" + JSON.stringify(tagId) + "]") === null) {
@@ -114,13 +122,15 @@ window.__ModuleLoader__.load({
     //#endregion
 
     //#region file tree
-    function TreeNode({ node, depth, expanded, onToggle, onOpen, onRename, onDelete, onCreateIn }) {
+    function TreeNode({ node, depth, dirs, loadingPaths, expanded, onToggle, onOpen, onRename, onDelete, onCreateIn }) {
       const [hover, setHover] = useState(false);
       const [renaming, setRenaming] = useState(false);
       const [renameVal, setRenameVal] = useState("");
       if (!node) return null;
       const isDir = node.type === "dir";
       const isOpen = isDir && !!expanded[node.path];
+      const children = isDir ? dirs[node.path]?.children : undefined; // undefined = 未加载
+      const isLoading = isDir && !!loadingPaths[node.path];
       const startRename = () => {
         setRenameVal(node.name);
         setRenaming(true);
@@ -179,12 +189,19 @@ window.__ModuleLoader__.load({
                 : null,
             ],
           }),
-          isDir && isOpen && node.children && node.children.length > 0
+          isDir && isOpen
             ? jsx("div", {
                 className: "dfx-treeChildren",
-                children: node.children.map((child) =>
-                  jsx(TreeNode, { node: child, depth: depth + 1, expanded, onToggle, onOpen, onRename, onDelete, onCreateIn }, child.path)
-                ),
+                children: [
+                  isLoading && !children ? jsx("div", { className: "dfx-status", children: "加载中…" }) : null,
+                  children && children.length > 0
+                    ? children.map((child) =>
+                        jsx(TreeNode, { node: child, depth: depth + 1, dirs, loadingPaths, expanded, onToggle, onOpen, onRename, onDelete, onCreateIn }, child.path)
+                      )
+                    : children
+                      ? jsx("div", { className: "dfx-empty", children: "（空目录）" })
+                      : null,
+                ],
               })
             : null,
         ],
@@ -192,34 +209,75 @@ window.__ModuleLoader__.load({
     }
 
     function FilesTab({ sessionId }) {
-      const [tree, setTree] = useState(null);
+      const [level, setLevel] = useState(null); // 根层（工作区直接内容），首屏只拉这一层
       const [root, setRoot] = useState(null);
       const [err, setErr] = useState(null);
-      const [expanded, setExpanded] = useState({ "": true });
+      const [expanded, setExpanded] = useState({}); // path -> 是否展开
+      const [dirs, setDirs] = useState({}); // path -> { children, loaded }
+      const [loadingPaths, setLoadingPaths] = useState({}); // path -> 正在拉取该层
       const [createState, setCreateState] = useState(null); // { dir, kind }
       const [createVal, setCreateVal] = useState("");
       const [status, setStatus] = useState("");
 
-      const reload = useCallback(() => {
+      // 同步读写副本，供异步链路（展开/刷新/全部展开）读取最新值
+      const dirsRef = useRef(dirs);
+      dirsRef.current = dirs;
+      const levelRef = useRef(level);
+      levelRef.current = level;
+      const setDirLoaded = (p, children) => {
+        dirsRef.current = { ...dirsRef.current, [p]: { children, loaded: true } };
+        setDirs(dirsRef.current);
+      };
+
+      const fetchLevel = useCallback(
+        async (dir) => {
+          const r = await fetch(`/dshkit-fs/tree?session=${encodeURIComponent(sessionId)}&dir=${encodeURIComponent(dir)}`);
+          const d = await r.json();
+          if (!d.ok) throw new Error(d.error || "failed");
+          return d;
+        },
+        [sessionId]
+      );
+
+      const reload = useCallback(async () => {
         if (!sessionId) {
-          setTree(null);
+          setLevel(null);
           setRoot(null);
+          dirsRef.current = {};
+          setDirs({});
           setErr("当前无活动会话");
           return;
         }
-        fetch(`/dshkit-fs/tree?session=${encodeURIComponent(sessionId)}`)
-          .then((r) => r.json())
-          .then((d) => {
-            if (!d.ok) throw new Error(d.error || "failed");
-            setRoot(d.root);
-            setTree(d.tree);
-            setErr(null);
-          })
-          .catch((e) => setErr(e.message));
-      }, [sessionId]);
+        setErr(null);
+        try {
+          const d = await fetchLevel("");
+          setRoot(d.root);
+          levelRef.current = d.level;
+          setLevel(d.level);
+          // 同步刷新已展开目录层（文件操作后保持树新鲜）
+          for (const p of Object.keys(dirsRef.current)) {
+            if (!dirsRef.current[p].loaded) continue;
+            try {
+              const sub = await fetchLevel(p);
+              setDirLoaded(p, sub.level);
+            } catch {
+              /* 目录可能已删除，保留旧数据 */
+            }
+          }
+        } catch (e) {
+          setErr(e.message);
+        }
+      }, [sessionId, fetchLevel]);
+
       useEffect(() => {
+        setLevel(null);
+        setDirs({});
+        dirsRef.current = {};
+        setExpanded({});
+        setStatus("");
         reload();
       }, [reload]);
+
       useEffect(() => {
         if (!sessionId) return;
         const onChanged = (ev) => {
@@ -240,24 +298,62 @@ window.__ModuleLoader__.load({
         return res.json();
       }, []);
 
-      const toggleDir = useCallback((p) => {
-        setExpanded((prev) => ({ ...prev, [p]: !prev[p] }));
-      }, []);
+      const toggleDir = useCallback(
+        async (p) => {
+          setExpanded((prev) => ({ ...prev, [p]: !prev[p] }));
+          const d = dirsRef.current[p];
+          if (!d || !d.loaded) {
+            setLoadingPaths((prev) => ({ ...prev, [p]: true }));
+            try {
+              const sub = await fetchLevel(p);
+              setDirLoaded(p, sub.level);
+            } catch (e) {
+              setStatus("加载失败：" + (e.message || String(e)));
+            } finally {
+              setLoadingPaths((prev) => {
+                const n = { ...prev };
+                delete n[p];
+                return n;
+              });
+            }
+          }
+        },
+        [fetchLevel]
+      );
 
       const openFile = (node) => {
         window.dispatchEvent(new CustomEvent("dshkit:openfile", { detail: { path: node.path, name: node.name, sessionId } }));
       };
 
-      const expandAll = () => {
+      const expandAll = useCallback(async () => {
         const next = {};
-        const walk = (n) => {
-          if (n.type === "dir") {
-            next[n.path] = true;
-            (n.children || []).forEach(walk);
+        const seen = new Set();
+        const load = async (rel, depth) => {
+          if (depth > 12 || seen.has(rel)) return;
+          seen.add(rel);
+          if (rel !== "") {
+            const d = dirsRef.current[rel];
+            if (!d || !d.loaded) {
+              try {
+                const sub = await fetchLevel(rel);
+                setDirLoaded(rel, sub.level);
+              } catch {
+                return;
+              }
+            }
           }
+          next[rel] = true;
+          const kids = rel === "" ? levelRef.current : dirsRef.current[rel]?.children;
+          for (const k of kids || []) if (k.type === "dir") await load(k.path, depth + 1);
         };
-        if (tree) walk(tree);
+        await load("", 0);
         setExpanded(next);
+      }, [fetchLevel]);
+
+      const collapseAll = () => {
+        setExpanded({});
+        dirsRef.current = {};
+        setDirs({});
       };
 
       const commitCreate = async () => {
@@ -319,7 +415,6 @@ window.__ModuleLoader__.load({
       };
 
       if (err) return jsx("div", { className: "dfx-empty", children: err });
-      if (!tree) return jsx("div", { className: "dfx-status", children: "加载中…" });
       return jsxs("div", {
         className: "dfx-root",
         children: [
@@ -330,7 +425,7 @@ window.__ModuleLoader__.load({
               jsx("button", { type: "button", className: "dfx-toolBtn", onClick: () => { setCreateState({ dir: "", kind: "dir" }); setCreateVal(""); }, children: "＋目录" }),
               jsx("button", { type: "button", className: "dfx-toolBtn", onClick: reload, children: "刷新" }),
               jsx("button", { type: "button", className: "dfx-toolBtn", onClick: expandAll, children: "全部展开" }),
-              jsx("button", { type: "button", className: "dfx-toolBtn", onClick: () => setExpanded({}), children: "全部收起" }),
+              jsx("button", { type: "button", className: "dfx-toolBtn", onClick: collapseAll, children: "全部收起" }),
             ],
           }),
           createState
@@ -356,19 +451,17 @@ window.__ModuleLoader__.load({
             : null,
           status ? jsx("div", { className: "dfx-status", children: status }) : null,
           root ? jsx("div", { className: "dfx-status", children: root.replace(/\\/g, "/") }) : null,
-          jsx("div", {
-            className: "dfx-body",
-            children: jsx(TreeNode, {
-              node: tree,
-              depth: 0,
-              expanded,
-              onToggle: toggleDir,
-              onOpen: openFile,
-              onRename: renameNode,
-              onDelete: deleteNode,
-              onCreateIn: (dir, kind) => { setCreateState({ dir, kind }); setCreateVal(""); },
-            }),
-          }),
+          !level
+            ? jsx("div", { className: "dfx-status", children: "加载中…" })
+            : jsx("div", {
+                className: "dfx-body",
+                children:
+                  level.length === 0
+                    ? jsx("div", { className: "dfx-empty", children: "（空工作区）" })
+                    : level.map((child) =>
+                        jsx(TreeNode, { node: child, depth: 0, dirs, loadingPaths, expanded, onToggle: toggleDir, onOpen: openFile, onRename: renameNode, onDelete: deleteNode, onCreateIn: (dir, kind) => { setCreateState({ dir, kind }); setCreateVal(""); } }, child.path)
+                      ),
+              }),
         ],
       });
     }
@@ -415,6 +508,7 @@ window.__ModuleLoader__.load({
         if (s && typeof s.open === "function") s.open(id);
         setSessionId(id);
       };
+      // 两个面板都常驻挂载（keep-alive）：切换 Tab 仅隐藏，文件树不卸载、不重新加载
       return jsxs("div", {
         className: "dfx-root",
         children: [
@@ -425,9 +519,8 @@ window.__ModuleLoader__.load({
               jsx("button", { type: "button", className: "dfx-tab" + (tab === "files" ? " dfx-tabActive" : ""), onClick: () => setTab("files"), children: "文件" }),
             ],
           }),
-          tab === "sessions"
-            ? jsx(SessionsTab, { sessionId, onSelect })
-            : jsx(FilesTab, { sessionId }, "files"),
+          jsx("div", { className: "dfx-pane", hidden: tab !== "sessions", children: jsx(SessionsTab, { sessionId, onSelect }) }),
+          jsx("div", { className: "dfx-pane", hidden: tab !== "files", children: jsx(FilesTab, { sessionId }) }),
         ],
       });
     }
@@ -665,6 +758,7 @@ window.__ModuleLoader__.load({
             }
             setContent(d.content ?? "");
             setDirty(false);
+            dirtyByPath.set(filePath, false);
             setStatus("");
             setLoaded(true);
           })
@@ -675,6 +769,8 @@ window.__ModuleLoader__.load({
           });
         return () => controller.abort();
       }, [filePath, sessionId]); // ekind 由 filePath 派生，无需单独列入依赖
+
+      useEffect(() => () => dirtyByPath.delete(filePath), [filePath]);
 
       const save = () => {
         if (ekind === "json") {
@@ -695,6 +791,7 @@ window.__ModuleLoader__.load({
           .then((d) => {
             if (d.ok) {
               setDirty(false);
+              dirtyByPath.set(filePath, false);
               setStatus("已保存");
             } else setStatus("保存失败：" + (d.error || ""));
           })
@@ -706,6 +803,7 @@ window.__ModuleLoader__.load({
           const obj = JSON.parse(contentRef.current);
           setContent(JSON.stringify(obj, null, pretty ? 2 : 0));
           setDirty(true);
+          dirtyByPath.set(filePath, true);
           setStatus("");
         } catch (e) {
           setStatus("格式化失败：" + e.message);
@@ -725,6 +823,7 @@ window.__ModuleLoader__.load({
       const onContentChange = (e) => {
         setContent(e.currentTarget.value);
         setDirty(true);
+        dirtyByPath.set(filePath, true);
         setStatus("");
       };
 
@@ -757,6 +856,7 @@ window.__ModuleLoader__.load({
           const next = content.slice(0, s) + "    " + content.slice(en);
           setContent(next);
           setDirty(true);
+          dirtyByPath.set(filePath, true);
           setStatus("");
           requestAnimationFrame(() => {
             el.selectionStart = el.selectionEnd = s + 4;
@@ -776,8 +876,18 @@ window.__ModuleLoader__.load({
         }
       };
 
-      const lineCount = content ? content.split("\n").length : 1;
-      const gutterNumbers = Array.from({ length: lineCount }, (_, i) => String(i + 1)).join("\n");
+      // 行号按换行符计数（不分配 split 数组），gutter 数字按行数缓存：
+      // 避免大文件在每次渲染/每次按键时重复扫描重建
+      const lineCount = useMemo(() => {
+        if (!content) return 1;
+        let n = 1;
+        for (let i = 0; i < content.length; i++) if (content.charCodeAt(i) === 10) n++;
+        return n;
+      }, [content]);
+      const gutterNumbers = useMemo(
+        () => Array.from({ length: lineCount }, (_, i) => String(i + 1)).join("\n"),
+        [lineCount]
+      );
       const fileLabel = fileName || filePath.split("/").pop() || filePath;
 
       // 加载失败 / 二进制 / 超大文件
@@ -922,6 +1032,9 @@ window.__ModuleLoader__.load({
     //#region plugin entry
     const inject = ["slots", "locale", "sessions", "workspaces", "layout"];
 
+    /** 模块级脏标记：path -> 是否有未保存修改（供标签页 × 关闭时二次确认）。 */
+    const dirtyByPath = new Map();
+
     function apply(ctx) {
       appCtx = ctx;
 
@@ -968,6 +1081,7 @@ window.__ModuleLoader__.load({
           );
         });
         fileEntryDisposers.set(path, disposer);
+        scheduleTabSync();
       }
 
       function unregisterFileView(path) {
@@ -977,6 +1091,8 @@ window.__ModuleLoader__.load({
             d();
           } catch {}
           fileEntryDisposers.delete(path);
+          dirtyByPath.delete(path);
+          scheduleTabSync();
         }
       }
 
@@ -984,17 +1100,111 @@ window.__ModuleLoader__.load({
         for (const path of [...fileEntryDisposers.keys()]) unregisterFileView(path);
       }
 
+      //#region tab chrome：标签页 × 关闭按钮 + 打开文件自动激活
+      /** 给每个已打开的文件标签打上 data-dfx-file 标记并补挂关闭按钮。 */
+      function syncTabChrome() {
+        if (typeof document === "undefined") return;
+        const byName = new Map(); // basename -> path（同名取最后注册的）
+        for (const p of fileEntryDisposers.keys()) byName.set(p.split("/").pop() || p, p);
+        const buttons = document.querySelectorAll('button[role="tab"]');
+        for (const btn of buttons) {
+          const name = (btn.textContent || "").trim();
+          if (!byName.has(name)) continue;
+          if (!btn.dataset.dfxFile) btn.dataset.dfxFile = "1";
+          btn.__dfxPath = byName.get(name);
+          btn.title = name; // 悬浮显示完整文件名（省略号场景）
+          ensureTabClose(btn);
+        }
+      }
+      /** 在标签内追加一个真实 ✕ span：点击关闭（阻断冒泡，避免误激活），
+       *  不影响宿主标签环的下划线指示条；React 只管理自己的文本子节点，span 不会被清掉。 */
+      function ensureTabClose(btn) {
+        if (btn.querySelector(".dfx-tab-close")) return;
+        const span = document.createElement("span");
+        span.className = "dfx-tab-close";
+        span.setAttribute("aria-hidden", "true");
+        span.textContent = "✕";
+        span.addEventListener("click", (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          const path = btn.__dfxPath;
+          if (!path) return;
+          if (dirtyByPath.get(path) && !window.confirm("文件尚未保存，确定关闭？未保存的修改将丢失。")) return;
+          window.dispatchEvent(new CustomEvent("dshkit:closefile", { detail: { path } }));
+        });
+        btn.appendChild(span);
+      }
+      let tabSyncPending = false;
+      function scheduleTabSync() {
+        if (typeof document === "undefined") return;
+        if (tabSyncPending) return;
+        tabSyncPending = true;
+        requestAnimationFrame(() => {
+          tabSyncPending = false;
+          syncTabChrome();
+        });
+      }
+      /** 标签环由 views 版本驱动渲染，正文变化用 MutationObserver 兜底补标；
+       *  回调先过滤：只关心 tablist/tab 相关变更，避免聊天消息流逐帧全量扫描。 */
+      function onBodyMutation(mutations) {
+        for (const m of mutations) {
+          if (m.type !== "childList") continue;
+          const target = m.target;
+          if (target && target.nodeType === 1 && typeof target.closest === "function" && target.closest('[role="tablist"]')) {
+            scheduleTabSync();
+            return;
+          }
+          const nodes = m.addedNodes.length ? m.addedNodes : m.removedNodes;
+          for (const n of nodes) {
+            if (n.nodeType !== 1) continue;
+            if (n.matches?.('[role="tab"], [role="tablist"]') || n.querySelector?.('[role="tab"], [role="tablist"]')) {
+              scheduleTabSync();
+              return;
+            }
+          }
+        }
+      }
+      const tabObserver = typeof MutationObserver !== "undefined" && typeof document !== "undefined"
+        ? new MutationObserver(onBodyMutation)
+        : null;
+      if (tabObserver) tabObserver.observe(document.body, { childList: true, subtree: true });
+      /** 打开文件后自动激活对应标签：标签环只渲染 label 文本且激活态由宿主会话 store 决定，
+       *  插件无直接 API，等价做法是点击该标签按钮（其 onClick 即宿主 setView(id)）。
+       *  点击后校验 aria-selected，若宿主尚未提交 setView 则自动重试，避免激活被吞导致卡顿感。 */
+      function activateFileTab(name) {
+        if (typeof document === "undefined" || !name) return;
+        let attempts = 0;
+        const tryClick = () => {
+          attempts += 1;
+          if (attempts > 10) return;
+          const btn = Array.from(document.querySelectorAll('button[role="tab"]'))
+            .filter((b) => (b.textContent || "").trim() === name)
+            .pop(); // 同名取最后一个（新打开的排在后）
+          if (!btn) {
+            setTimeout(tryClick, 40); // 等标签环渲染完成
+            return;
+          }
+          btn.click();
+          setTimeout(() => {
+            const selected = Array.from(document.querySelectorAll('button[role="tab"]'))
+              .some((b) => (b.textContent || "").trim() === name && b.getAttribute("aria-selected") === "true");
+            if (!selected) tryClick(); // 点击未生效则重试
+          }, 80);
+        };
+        tryClick();
+      }
+      //#endregion
+
       const onOpenFile = (ev) => {
         const d = ev.detail || {};
         if (!d.path) return;
         const sessionId = d.sessionId || currentSessionId(ctx) || "";
         registerFileView({ path: d.path, name: d.name, sessionId });
+        activateFileTab(d.name || d.path.split("/").pop() || d.path);
       };
       window.addEventListener("dshkit:openfile", onOpenFile);
 
-      // Close file tab when its × is clicked (from the FileEditor tab itself we expose via a
-      // lightweight confirm; the primary close path is a small × we cannot add to the tab ring
-      // label, so we add a right-click / key affordance via events below).
+      // 关闭文件标签：编辑器内关闭按钮 / Ctrl+W / 标签页 ×（均派发此事件）。
       const onCloseRequest = (ev) => {
         const path = ev.detail && ev.detail.path;
         if (path) unregisterFileView(path);
@@ -1041,6 +1251,7 @@ window.__ModuleLoader__.load({
         window.removeEventListener("dshkit:closefile", onCloseRequest);
         window.removeEventListener("dshkit:fschanged", onFsChanged);
         if (unsubSessions) unsubSessions();
+        if (tabObserver) tabObserver.disconnect();
         closeAllFileViews();
       }, "plugin-file-explorer: unload");
     }

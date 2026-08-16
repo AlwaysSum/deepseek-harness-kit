@@ -88,6 +88,7 @@ body {
 }
 
 .side-btn {
+  position: relative;
   width: 100%;
   height: 36px;
   display: flex; align-items: center; justify-content: center;
@@ -100,6 +101,18 @@ body {
 }
 .side-btn:hover { background: var(--bg-hover); color: var(--accent-strong); }
 .side-btn:active { transform: translateY(1px); }
+/* 后台检测到新版本时，在「检查更新」按钮右上角显示红点 */
+.side-btn.has-update::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff4d4f;
+  border: 2px solid var(--bg, #171a22);
+}
 
 .sidebar-footer { color: #9aa7bd; font-size: 11px; }
 

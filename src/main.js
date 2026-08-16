@@ -1307,6 +1307,20 @@ async function refresh() {
 }
 
 // ---------- 启动 ----------
+// 每次启动后台静默检测一次更新（不弹窗）：发现新版本时在左下角「检查更新」按钮加红点并写一条日志
+async function checkUpdateSilently() {
+  let info;
+  try {
+    info = await invoke("check_update");
+  } catch {
+    return; // 网络异常等静默忽略，不打断启动
+  }
+  if (!info || info.error || !info.has_update || !info.latest) return;
+  el.btnSidebarUpdate.classList.add("has-update");
+  el.btnSidebarUpdate.title = `发现新版本 ${info.latest}（当前 v${info.current}），点击查看`;
+  logLine(`发现新版本 ${info.latest}（当前 v${info.current}），可点击左下角「检查更新」下载安装`, "ok");
+}
+
 (async function init() {
   await setupEvents();
   await refresh();
@@ -1353,4 +1367,7 @@ async function refresh() {
   } else {
     logLine("服务未运行：可点击「一键启动」", "dim");
   }
+
+  // 后台静默检测一次更新（不阻塞启动流程）
+  checkUpdateSilently();
 })();

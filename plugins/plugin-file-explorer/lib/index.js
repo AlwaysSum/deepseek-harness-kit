@@ -161,15 +161,19 @@ async function listDirWithFallback(ctx, target) {
   }));
 }
 
-async function buildTree(ctx, root, relDir, depth) {
-  if (depth > 12) return { name: "", type: "dir", path: "", children: [] };
+/**
+ * 列出一个目录的直接子项（单层，不递归），供客户端按需展开懒加载：
+ * 首次只取根层，展开某目录时再按 dir 拉取该层，避免整棵递归拖慢首屏。
+ * Returns [{ name, type: 'dir'|'file'|'other', path, size }...]。
+ */
+async function buildLevel(ctx, root, relDir) {
   const target = safeResolve(root, relDir);
-  if (!target) return { name: relDir.split(sep).pop(), type: "dir", path: relDir, children: [] };
+  if (!target) return [];
   let entries;
   try {
     entries = await listDirWithFallback(ctx, target);
   } catch {
-    return { name: relDir.split(sep).pop(), type: "dir", path: relDir, children: [] };
+    return [];
   }
   entries.sort((a, b) => {
     if (a.type === "dir" !== (b.type === "dir")) return a.type === "dir" ? -1 : 1;
@@ -180,14 +184,9 @@ async function buildTree(ctx, root, relDir, depth) {
     if (e.name === ".git" || e.name === "node_modules") continue;
     const childRel = relDir ? `${relDir}/${e.name}` : e.name;
     if (!safeResolve(root, childRel)) continue;
-    if (e.type === "dir") {
-      const sub = await buildTree(ctx, root, childRel, depth + 1);
-      children.push({ name: e.name, type: "dir", path: childRel, children: sub.children || [] });
-    } else {
-      children.push({ name: e.name, type: e.type === "file" ? "file" : "other", path: childRel, size: e.size });
-    }
+    children.push({ name: e.name, type: e.type === "dir" ? "dir" : e.type === "file" ? "file" : "other", path: childRel, size: e.size });
   }
-  return { name: relDir.split(sep).pop() || "/", type: "dir", path: relDir, children };
+  return children;
 }
 
 async function readFileWithFallback(ctx, target) {
@@ -296,9 +295,9 @@ export function apply(ctx) {
           const dir = url.searchParams.get("dir") ?? "";
           try {
             const root = await resolveSessionDir(ctx, session);
-            if (!root) return sendJson(res, 200, { ok: true, root: null, tree: null });
-            const tree = await buildTree(ctx, root, dir, 0);
-            sendJson(res, 200, { ok: true, root, tree });
+            if (!root) return sendJson(res, 200, { ok: true, root: null, dir, level: [] });
+            const level = await buildLevel(ctx, root, dir);
+            sendJson(res, 200, { ok: true, root, dir, level });
           } catch (error) {
             sendJson(res, 200, {
               ok: false,

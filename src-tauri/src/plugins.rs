@@ -63,6 +63,14 @@ fn load_plugin_entries(root: &PathBuf) -> Result<Vec<(String, Value, PathBuf)>, 
         if pkg_name.is_empty() {
             continue;
         }
+        // 仅把声明了 `dsh` 段的包视为内置插件：`dsh.bundle.patch` 是 profile
+        // bundle 的必需项（dsh 启动时强制校验），`dsh.client` 声明浏览器端注入。
+        // plugins/ 下随附的 @deepseek-ai 上游工具包（如 dsh-skill-badge）没有
+        // `dsh` 段，不是插件：不能把它登记进 dsh.profile.bundles，否则 dsh 启动
+        // 会因 "declares no dsh.bundle in its package.json" 直接报错。
+        if !pkg.get("dsh").map(|d| d.is_object()).unwrap_or(false) {
+            continue;
+        }
         entries.push((dirname_plugin_name(&dir), pkg, dir));
     }
     entries.sort_by(|a, b| a.0.cmp(&b.0));

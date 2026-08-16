@@ -1,6 +1,6 @@
 [package]
 name = "dsh-desktop"
-version = "0.2.0"
+version = "0.2.1"
 description = "DeepSeek Harness 桌面端：一键部署 / 一键启动 / 一键停止"
 authors = ["dsh-desktop"]
 edition = "2021"
