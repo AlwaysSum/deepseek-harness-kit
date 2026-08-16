@@ -1,9 +1,8 @@
 //! 服务管理：启动 / 停止 / 端口探测。
 
 use crate::deploy::{ensure_node, npx_cli};
-use crate::process::{build_env, emit_log, no_window};
+use crate::process::{build_env, emit_log, no_window, spawn_pump};
 use crate::state::{data_dir, write_dsh_marker, AppState, DSH_PACKAGE, ServiceHandle, Settings};
-use std::io::{BufRead, BufReader};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
@@ -83,18 +82,42 @@ pub fn start_impl(
     if !npx.exists() {
         return Err(format!("未找到 npx-cli.js（{}）", npx.display()));
     }
-    let mut cmd = Command::new(&env.node_exe);
-    cmd.args([
-        npx.to_str().unwrap(),
-        "--yes",
-        DSH_PACKAGE,
-        "web",
-        "--port",
-        &port.to_string(),
-    ]);
-    cmd.current_dir(&data_dir());
+
     let mut penv = build_env(&[&env.node_dir]);
     penv.insert("npm_config_registry".into(), settings.registry.clone());
+
+    // 组装启动命令：优先直接用缓存包的入口 JS 运行（绕开 npx 的 .cmd 脚本，
+    // 避免它回退到 PATH 里的系统 Node，比如 v18 缺 parseEnv 导致启动崩溃）；
+    // 包未缓存时回退到 npx（需要联网下载）。
+    let cmd_args: Vec<String> = if let Some(bin) = crate::state::dsh_bin_js() {
+        emit_log(
+            app,
+            "service:log",
+            "使用本地缓存的 dsh 运行时直接启动…",
+            "dim",
+        );
+        vec![
+            bin.to_string_lossy().into_owned(),
+            "web".into(),
+            "--port".into(),
+            port.to_string(),
+        ]
+    } else {
+        // 未缓存：npx 优先使用本地缓存，避免每次启动都联网校验
+        penv.insert("npm_config_prefer_offline".into(), "true".into());
+        vec![
+            npx.to_string_lossy().into_owned(),
+            "--yes".into(),
+            DSH_PACKAGE.into(),
+            "web".into(),
+            "--port".into(),
+            port.to_string(),
+        ]
+    };
+
+    let mut cmd = Command::new(&env.node_exe);
+    cmd.args(&cmd_args);
+    cmd.current_dir(&data_dir());
     cmd.envs(&penv);
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
@@ -104,25 +127,10 @@ pub fn start_impl(
     let pid = child.id();
     let out = child.stdout.take().ok_or("stdout 不可用")?;
     let err = child.stderr.take().ok_or("stderr 不可用")?;
-    std::mem::forget(child); // 后台进程由 taskkill 管理
 
-    let a1 = app.clone();
-    let t1 = std::thread::spawn(move || {
-        for line in BufReader::new(out).lines() {
-            if let Ok(l) = line {
-                emit_log(&a1, "service:log", &l, "out");
-            }
-        }
-    });
-    let a2 = app.clone();
-    let t2 = std::thread::spawn(move || {
-        for line in BufReader::new(err).lines() {
-            if let Ok(l) = line {
-                emit_log(&a2, "service:log", &l, "err");
-            }
-        }
-    });
-    let _ = (t1, t2);
+    // 泵取 stdout/stderr：兼容 \r 进度条，日志实时显示
+    spawn_pump(app.clone(), "service:log".to_string(), "out".into(), out);
+    spawn_pump(app.clone(), "service:log".to_string(), "err".into(), err);
 
     *state.service.lock().unwrap() = Some(ServiceHandle { pid });
     emit_log(app, "service:log", &format!("服务进程已启动（PID {}），等待就绪…", pid), "dim");
@@ -134,17 +142,50 @@ pub fn start_impl(
         },
     );
 
-    // 等待端口就绪（最长 5 分钟，首次启动可能较慢）
-    let deadline = Instant::now() + Duration::from_secs(300);
+    // 等待端口就绪（最长 5 分钟，首次启动可能需要下载）
+    let started = Instant::now();
+    let deadline = started + Duration::from_secs(300);
+    let mut last_feedback = Instant::now();
     let mut ready = false;
-    while Instant::now() < deadline {
+    loop {
         if probe_http(port) {
             ready = true;
             break;
         }
-        std::thread::sleep(Duration::from_secs(1));
+        // 子进程提前退出：直接报失败，不必干等 5 分钟
+        if let Ok(Some(status)) = child.try_wait() {
+            *state.service.lock().unwrap() = None;
+            let _ = app.emit(
+                "service:state",
+                ServiceStatePayload {
+                    state: "failed".into(),
+                    url: service_url(port),
+                },
+            );
+            return Err(format!(
+                "服务进程提前退出（退出码 {}），请查看上方日志。",
+                status.code().unwrap_or(-1)
+            ));
+        }
+        // 周期性反馈，避免界面看起来“卡死”
+        if last_feedback.elapsed() >= Duration::from_secs(15) {
+            emit_log(
+                app,
+                "service:log",
+                &format!("仍在等待服务就绪，已等待 {} 秒…", started.elapsed().as_secs()),
+                "dim",
+            );
+            last_feedback = Instant::now();
+        }
+        if Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(500));
     }
     if !ready {
+        // 超时：清理残留进程与状态，避免留下无法停止的孤儿进程
+        let _ = kill_pid(pid);
+        *state.service.lock().unwrap() = None;
         let _ = app.emit(
             "service:state",
             ServiceStatePayload {
@@ -154,6 +195,8 @@ pub fn start_impl(
         );
         return Err("服务启动超时（5 分钟内未就绪），请查看上方日志。".into());
     }
+    // 启动成功：后台进程交由 taskkill 管理
+    std::mem::forget(child);
     emit_log(app, "service:log", &format!("服务已就绪：{}", service_url(port)), "ok");
     // 启动成功即视为已部署（npx 缓存已有运行时）
     let _ = write_dsh_marker(

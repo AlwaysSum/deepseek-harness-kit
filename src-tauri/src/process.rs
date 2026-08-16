@@ -1,7 +1,7 @@
 //! 进程执行工具：流式日志、捕获输出、环境构建。
 
 use std::collections::HashMap;
-use std::io::{BufRead, BufReader};
+use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use tauri::{AppHandle, Emitter};
@@ -22,9 +22,61 @@ pub fn emit_log(app: &AppHandle, event: &str, line: &str, kind: &str) {
     );
 }
 
+/// 泵取子进程输出并逐段推送给前端。
+/// 以字节流方式读取，遇到 `\r` 或 `\n` 即作为一条日志发出：
+/// npx 等工具用 `\r` 刷新的进度条不会被 BufReader::lines 整段吞掉，
+/// 日志可以实时显示。连续相同的段落去重，避免固定文案的旋转动画刷屏。
+pub fn spawn_pump<R: Read + Send + 'static>(
+    app: AppHandle,
+    event: String,
+    kind: String,
+    reader: R,
+) -> std::thread::JoinHandle<()> {
+    std::thread::spawn(move || {
+        let mut reader = reader;
+        let mut buf = [0u8; 4096];
+        let mut acc = String::new();
+        let mut last: Option<String> = None;
+        loop {
+            match reader.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let s = String::from_utf8_lossy(&buf[..n]);
+                    for ch in s.chars() {
+                        if ch == '\n' || ch == '\r' {
+                            let seg = acc.trim().to_string();
+                            if !seg.is_empty() && last.as_deref() != Some(seg.as_str()) {
+                                emit_log(&app, &event, &seg, &kind);
+                                last = Some(seg);
+                            }
+                            acc.clear();
+                        } else {
+                            acc.push(ch);
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+        let seg = acc.trim().to_string();
+        if !seg.is_empty() && last.as_deref() != Some(seg.as_str()) {
+            emit_log(&app, &event, &seg, &kind);
+        }
+    })
+}
+
 /// 构建子进程环境：把给定目录（如托管 node 目录）放到 PATH 最前
 pub fn build_env(extra_paths: &[&Path]) -> HashMap<String, String> {
     let mut env: HashMap<String, String> = std::env::vars().collect();
+    // Windows 环境变量名不区分大小写（系统里通常叫 Path）。
+    // 必须先收敛成单个 PATH 键：否则会残留大小写不同的重复键，
+    // 子进程解析 node 时可能取到旧 Path 里的系统 Node（如 v18），
+    // 导致 dsh 运行时报 parseEnv 等不兼容错误。
+    let sys_path = env
+        .remove("Path")
+        .or_else(|| env.remove("PATH"))
+        .or_else(|| env.remove("path"))
+        .unwrap_or_default();
     let mut path = String::new();
     for p in extra_paths {
         if let Some(s) = p.to_str() {
@@ -32,9 +84,7 @@ pub fn build_env(extra_paths: &[&Path]) -> HashMap<String, String> {
             path.push(';');
         }
     }
-    if let Some(p) = env.get("PATH") {
-        path.push_str(p);
-    }
+    path.push_str(&sys_path);
     env.insert("PATH".into(), path);
     env
 }
@@ -74,24 +124,8 @@ pub fn run_stream(
     let out = child.stdout.take().ok_or("stdout 不可用")?;
     let err = child.stderr.take().ok_or("stderr 不可用")?;
 
-    let a1 = app.clone();
-    let ev1 = event.to_string();
-    let t1 = std::thread::spawn(move || {
-        for line in BufReader::new(out).lines() {
-            if let Ok(l) = line {
-                emit_log(&a1, &ev1, &l, "out");
-            }
-        }
-    });
-    let a2 = app.clone();
-    let ev2 = event.to_string();
-    let t2 = std::thread::spawn(move || {
-        for line in BufReader::new(err).lines() {
-            if let Ok(l) = line {
-                emit_log(&a2, &ev2, &l, "err");
-            }
-        }
-    });
+    let t1 = spawn_pump(app.clone(), event.to_string(), "out".into(), out);
+    let t2 = spawn_pump(app.clone(), event.to_string(), "err".into(), err);
 
     let status = child.wait().map_err(|e| format!("等待进程失败: {}", e))?;
     let _ = t1.join();

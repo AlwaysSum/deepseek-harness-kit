@@ -388,6 +388,10 @@ async function setupEvents() {
       logLine("服务已停止", "ok");
       refresh();
     }
+    if (p.state === "failed") {
+      logLine("服务启动失败，请查看上方日志", "err");
+      refresh();
+    }
   });
   await listen("update:download", (ev) => {
     const p = ev.payload;
