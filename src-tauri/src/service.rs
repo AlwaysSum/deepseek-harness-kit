@@ -1,8 +1,8 @@
 //! 服务管理：启动 / 停止 / 端口探测。
 
-use crate::deploy::{ensure_node, npx_cli};
+use crate::deploy::ensure_node;
 use crate::process::{build_env, emit_log, no_window, spawn_pump};
-use crate::state::{data_dir, write_dsh_marker, AppState, DSH_PACKAGE, ServiceHandle, Settings};
+use crate::state::{data_dir, write_dsh_marker, AppState, ServiceHandle, Settings};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
@@ -158,22 +158,22 @@ pub fn start_impl(
     }
 
     let env = ensure_node(app, settings)?;
-    let npx = npx_cli(&env);
-    if !npx.exists() {
-        return Err(format!("未找到 npx-cli.js（{}）", npx.display()));
-    }
 
     let mut penv = build_env(&[&env.node_dir]);
     penv.insert("npm_config_registry".into(), settings.registry.clone());
-    // 用官方 npx 指令启动（报错时 npm 会给出完整日志）。
-    // --prefer-offline 优先使用本地缓存，避免每次启动联网校验；
-    // PATH 已由 build_env 收敛为单个键并把便携版 Node 放最前，npx 内部
-    // 的 .cmd 脚本会因此用便携版 v22 运行 dsh，不会回退到系统 v18。
-    penv.insert("npm_config_prefer_offline".into(), "true".into());
+    // 直接执行缓存包的入口 JS，并把 Node 锁死为便携版 v22：
+    // npx 的 .cmd 脚本会回退到 PATH 里的系统 Node（如 v18 缺 parseEnv 崩溃），不能用，
+    // 因此启动绝不走 npx。包未缓存时提示先一键部署（部署内部也是用 npx 只装包、再直连入口）。
+    let bin = crate::state::dsh_bin_js()
+        .ok_or("未找到本地缓存的 dsh 运行时，请先点击「一键部署」下载后再启动。")?;
+    emit_log(
+        app,
+        "service:log",
+        "使用本地缓存的 dsh 运行时（便携版 Node）直接启动…",
+        "dim",
+    );
     let cmd_args: Vec<String> = vec![
-        npx.to_string_lossy().into_owned(),
-        "--yes".into(),
-        DSH_PACKAGE.into(),
+        bin.to_string_lossy().into_owned(),
         "web".into(),
         "--port".into(),
         port.to_string(),

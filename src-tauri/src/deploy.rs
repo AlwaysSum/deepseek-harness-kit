@@ -132,17 +132,33 @@ pub fn deploy_impl(
     );
     let mut penv = build_env(&[&env.node_dir]);
     penv.insert("npm_config_registry".into(), settings.registry.clone());
-    // 用 `web --help` 触发下载并验证可执行（exit 0）
+    // 1) npx 只负责安装/更新包：用 --call 跑一个无操作命令，绝不执行 dsh 的 bin。
+    //    npx 执行 bin 走 .cmd 脚本，会回退到 PATH 里的系统 Node（v18 缺 parseEnv 崩溃）。
+    let node_str = env.node_exe.to_str().unwrap();
+    let npx_str = npx.to_str().unwrap();
+    let spec_str = spec.as_str();
     run_stream(
         app,
-        env.node_exe.to_str().unwrap(),
+        node_str,
         &[
-            npx.to_str().unwrap(),
+            npx_str,
             "--yes",
-            &spec,
-            "web",
-            "--help",
+            "--package",
+            spec_str,
+            "--call",
+            "node -e 1",
         ],
+        Some(&data_dir()),
+        Some(&penv),
+        "deploy:log",
+    )?;
+    // 2) 用便携版 Node 直接执行缓存包入口验证可执行（锁死正确版本）
+    let bin = crate::state::dsh_bin_js().ok_or("npx 安装后未找到 dsh 运行时入口")?;
+    let bin_str = bin.to_str().unwrap();
+    run_stream(
+        app,
+        node_str,
+        &[bin_str, "web", "--help"],
         Some(&data_dir()),
         Some(&penv),
         "deploy:log",
