@@ -1,9 +1,11 @@
 //! 服务管理：启动 / 停止 / 端口探测。
 
 use crate::deploy::ensure_node;
-use crate::process::{build_env, emit_log, no_window, spawn_pump};
+use crate::process::{build_env, emit_log, no_window, spawn_pump_tail};
 use crate::state::{data_dir, write_dsh_marker, AppState, ServiceHandle, Settings};
+use std::collections::VecDeque;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
@@ -94,6 +96,31 @@ fn port_listen_lines(port: u16) -> String {
     } else {
         lines[..lines.len().min(8)].join("\n")
     }
+}
+
+/// 把子进程最近输出回放到日志：启动失败/超时时确保真实报错可见，
+/// 而不是只看到“仍在等待服务就绪”的循环。
+fn dump_tail(tail: &Arc<Mutex<VecDeque<String>>>, app: &AppHandle, title: &str) {
+    let lines = tail.lock().unwrap();
+    if lines.is_empty() {
+        return;
+    }
+    emit_log(app, "service:log", title, "err");
+    for l in lines.iter() {
+        emit_log(app, "service:log", l, "err");
+    }
+}
+
+/// 查询端口当前占用者，用于 EADDRINUSE 等启动失败时给出可操作的提示
+fn port_holder_hint(port: u16) -> Option<String> {
+    let pid = find_pid_on_port(port)?;
+    let name = process_name(pid);
+    Some(format!(
+        "端口 {} 当前被进程 PID {}（{}）占用，请先停止该进程，或在设置中更换端口后再启动。",
+        port,
+        pid,
+        if name.is_empty() { "未知" } else { &name }
+    ))
 }
 
 /// 启动服务（后台进程 + 日志流 + 端口就绪等待）
@@ -202,9 +229,12 @@ pub fn start_impl(
     let out = child.stdout.take().ok_or("stdout 不可用")?;
     let err = child.stderr.take().ok_or("stderr 不可用")?;
 
-    // 泵取 stdout/stderr：兼容 \r 进度条，日志实时显示
-    spawn_pump(app.clone(), "service:log".to_string(), "out".into(), out);
-    spawn_pump(app.clone(), "service:log".to_string(), "err".into(), err);
+    // 泵取 stdout/stderr：兼容 \r 进度条，日志实时显示；同时缓存最近 60 段，
+    // 失败/超时时回放到日志，确保命令的真实报错可见。
+    let (_t1, tail_out) =
+        spawn_pump_tail(app.clone(), "service:log".to_string(), "out".into(), out, 60);
+    let (_t2, tail_err) =
+        spawn_pump_tail(app.clone(), "service:log".to_string(), "err".into(), err, 60);
 
     *state.service.lock().unwrap() = Some(ServiceHandle { pid });
     emit_log(app, "service:log", &format!("服务进程已启动（PID {}），等待就绪…", pid), "dim");
@@ -216,18 +246,20 @@ pub fn start_impl(
         },
     );
 
-    // 等待端口就绪（最长 5 分钟，首次启动可能需要下载）
+    // 等待端口就绪（最长 120 秒；dsh 已由部署步骤预装，无需再次下载）
     let started = Instant::now();
-    let deadline = started + Duration::from_secs(300);
+    let deadline = started + Duration::from_secs(120);
     let mut last_feedback = Instant::now();
     let mut diagnosed = false;
+    let mut warned_stuck = false;
     let mut ready = false;
     loop {
         if probe_http(port) {
             ready = true;
             break;
         }
-        // 子进程提前退出：直接报失败，不必干等 5 分钟
+        // 子进程提前退出：立即回放它的真实输出（如 EADDRINUSE 报错），
+        // 而不是继续在“等待就绪”里空转。
         if let Ok(Some(status)) = child.try_wait() {
             *state.service.lock().unwrap() = None;
             let _ = app.emit(
@@ -237,10 +269,18 @@ pub fn start_impl(
                     url: service_url(port),
                 },
             );
-            return Err(format!(
-                "服务进程提前退出（退出码 {}），请查看上方日志。",
+            // 稍等泵线程把输出写进缓冲，再回放尾部
+            std::thread::sleep(Duration::from_millis(500));
+            dump_tail(&tail_out, app, "── 服务进程输出（最后 60 段）──");
+            dump_tail(&tail_err, app, "── 服务进程错误输出（最后 60 段）──");
+            let mut msg = format!(
+                "服务进程提前退出（退出码 {}），以上为进程输出的最后内容，请据此排查。",
                 status.code().unwrap_or(-1)
-            ));
+            );
+            if let Some(h) = port_holder_hint(port) {
+                msg.push_str(&format!("\n{}", h));
+            }
+            return Err(msg);
         }
         // 周期性反馈，避免界面看起来“卡死”
         if last_feedback.elapsed() >= Duration::from_secs(15) {
@@ -267,7 +307,7 @@ pub fn start_impl(
                 emit_log(
                     app,
                     "service:log",
-                    "[诊断] 端口已监听但 HTTP 不应答：dsh 启动过程疑似被网络请求阻塞（约 21 秒/次超时）。请复制上方 [命令] 在终端手动运行观察完整输出，或检查系统代理与网络，或更换端口后重试。",
+                    "[诊断] 端口已监听但 HTTP 不应答：dsh 启动过程疑似被网络请求阻塞（约 21 秒/次超时）。请检查系统代理与网络，或更换端口后重试。",
                     "warn",
                 );
             } else {
@@ -278,6 +318,20 @@ pub fn start_impl(
                     "warn",
                 );
             }
+        }
+        // 90 秒仍未就绪：提示可能已卡死，即将自动停止
+        if !warned_stuck && started.elapsed() >= Duration::from_secs(90) {
+            warned_stuck = true;
+            emit_log(
+                app,
+                "service:log",
+                &format!(
+                    "[警告] 已等待 {} 秒仍未就绪，疑似启动卡死；{} 秒后自动停止并回放进程输出。",
+                    started.elapsed().as_secs(),
+                    deadline.saturating_duration_since(Instant::now()).as_secs()
+                ),
+                "warn",
+            );
         }
         if Instant::now() >= deadline {
             break;
@@ -295,7 +349,17 @@ pub fn start_impl(
                 url: service_url(port),
             },
         );
-        return Err("服务启动超时（5 分钟内未就绪），请查看上方日志。".into());
+        std::thread::sleep(Duration::from_millis(600));
+        dump_tail(&tail_out, app, "── 服务进程输出（最后 60 段）──");
+        dump_tail(&tail_err, app, "── 服务进程错误输出（最后 60 段）──");
+        let mut msg = format!(
+            "服务启动超时（{} 秒内未就绪），已自动停止进程；以上为进程输出的最后内容，请据此排查。",
+            started.elapsed().as_secs()
+        );
+        if let Some(h) = port_holder_hint(port) {
+            msg.push_str(&format!("\n{}", h));
+        }
+        return Err(msg);
     }
     // 启动成功：后台进程交由 taskkill 管理
     std::mem::forget(child);

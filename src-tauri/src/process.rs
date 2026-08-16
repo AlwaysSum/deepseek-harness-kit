@@ -1,9 +1,10 @@
 //! 进程执行工具：流式日志、捕获输出、环境构建。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::Read;
 use std::path::Path;
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Emitter};
 
 #[derive(serde::Serialize, Clone)]
@@ -32,7 +33,25 @@ pub fn spawn_pump<R: Read + Send + 'static>(
     kind: String,
     reader: R,
 ) -> std::thread::JoinHandle<()> {
-    std::thread::spawn(move || {
+    spawn_pump_tail(app, event, kind, reader, 0).0
+}
+
+/// 同 spawn_pump，但额外把最近 `max` 段输出缓存进共享缓冲：
+/// 启动失败/超时时可把子进程的真实报错回放到日志，而不是只看到“等待就绪”的循环。
+/// `max = 0` 表示不缓存。
+pub fn spawn_pump_tail<R: Read + Send + 'static>(
+    app: AppHandle,
+    event: String,
+    kind: String,
+    reader: R,
+    max: usize,
+) -> (
+    std::thread::JoinHandle<()>,
+    Arc<Mutex<VecDeque<String>>>,
+) {
+    let tail: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+    let t2 = tail.clone();
+    let h = std::thread::spawn(move || {
         let mut reader = reader;
         let mut buf = [0u8; 4096];
         let mut acc = String::new();
@@ -45,9 +64,12 @@ pub fn spawn_pump<R: Read + Send + 'static>(
                     for ch in s.chars() {
                         if ch == '\n' || ch == '\r' {
                             let seg = acc.trim().to_string();
-                            if !seg.is_empty() && last.as_deref() != Some(seg.as_str()) {
-                                emit_log(&app, &event, &seg, &kind);
-                                last = Some(seg);
+                            if !seg.is_empty() {
+                                if last.as_deref() != Some(seg.as_str()) {
+                                    emit_log(&app, &event, &seg, &kind);
+                                    last = Some(seg.clone());
+                                }
+                                push_tail(&t2, seg, max);
                             }
                             acc.clear();
                         } else {
@@ -59,10 +81,27 @@ pub fn spawn_pump<R: Read + Send + 'static>(
             }
         }
         let seg = acc.trim().to_string();
-        if !seg.is_empty() && last.as_deref() != Some(seg.as_str()) {
-            emit_log(&app, &event, &seg, &kind);
+        if !seg.is_empty() {
+            if last.as_deref() != Some(seg.as_str()) {
+                emit_log(&app, &event, &seg, &kind);
+            }
+            push_tail(&t2, seg, max);
         }
-    })
+    });
+    (h, tail)
+}
+
+fn push_tail(tail: &Mutex<VecDeque<String>>, seg: String, max: usize) {
+    if max == 0 {
+        return;
+    }
+    let mut t = tail.lock().unwrap();
+    if t.back().map(|x| x.as_str()) != Some(seg.as_str()) {
+        t.push_back(seg);
+        while t.len() > max {
+            t.pop_front();
+        }
+    }
 }
 
 /// 构建子进程环境：把给定目录（如托管 node 目录）放到 PATH 最前
