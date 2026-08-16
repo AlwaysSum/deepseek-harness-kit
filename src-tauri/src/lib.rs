@@ -1,6 +1,7 @@
 mod commands;
 mod deploy;
 mod download;
+mod firewall;
 mod hub;
 mod plugins;
 mod process;

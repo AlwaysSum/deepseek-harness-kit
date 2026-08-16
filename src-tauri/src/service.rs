@@ -123,6 +123,54 @@ fn port_holder_hint(port: u16) -> Option<String> {
     ))
 }
 
+/// 后台检测防火墙并尝试放行端口（在诊断线程中调用，不阻塞等待循环）：
+/// 端口已监听但 HTTP 不应答 → 防火墙开启且无放行规则 → UAC 提权添加放行规则。
+fn firewall_ensure(port: u16, app: &AppHandle) {
+    if !crate::firewall::firewall_enabled() {
+        emit_log(
+            app,
+            "service:log",
+            "[防火墙] 系统防火墙未启用，端口不应被 Windows 防火墙拦截。若仍无法访问，请检查第三方安全软件（如 360、火绒等）的防火墙是否拦截了该端口。",
+            "dim",
+        );
+        return;
+    }
+    if crate::firewall::rule_exists(port) {
+        emit_log(
+            app,
+            "service:log",
+            &format!("[防火墙] 端口 {} 已有放行规则，问题不在防火墙。", port),
+            "dim",
+        );
+        return;
+    }
+    emit_log(
+        app,
+        "service:log",
+        &format!(
+            "[防火墙] 端口 {} 已监听但 HTTP 不应答，疑似被 Windows 防火墙拦截，尝试自动放行（将弹出 UAC 授权窗口，请点击「是」）…",
+            port
+        ),
+        "warn",
+    );
+    match crate::firewall::add_port_rule(port) {
+        Ok(()) => {
+            emit_log(
+                app,
+                "service:log",
+                &format!("[防火墙] 已为端口 {} 添加入站放行规则，请稍候服务就绪。", port),
+                "ok",
+            );
+        }
+        Err(e) => emit_log(
+            app,
+            "service:log",
+            &format!("[防火墙] 自动放行失败：{}", e),
+            "err",
+        ),
+    }
+}
+
 /// 启动服务（后台进程 + 日志流 + 端口就绪等待）
 pub fn start_impl(
     app: &AppHandle,
@@ -307,9 +355,13 @@ pub fn start_impl(
                 emit_log(
                     app,
                     "service:log",
-                    "[诊断] 端口已监听但 HTTP 不应答：dsh 启动过程疑似被网络请求阻塞（约 21 秒/次超时）。请检查系统代理与网络，或更换端口后重试。",
+                    "[诊断] 端口已监听但 HTTP 不应答：可能是 Windows 防火墙拦截了入站连接，或 dsh 启动过程被网络请求阻塞。将自动检测防火墙并尝试放行端口。",
                     "warn",
                 );
+                // 后台检测防火墙：开启且无放行规则时，通过 UAC 提权添加规则放行该端口
+                let app2 = app.clone();
+                let port2 = port;
+                std::thread::spawn(move || firewall_ensure(port2, &app2));
             } else {
                 emit_log(
                     app,
