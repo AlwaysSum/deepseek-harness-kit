@@ -74,6 +74,24 @@ fn process_name(pid: u32) -> String {
         .unwrap_or_default()
 }
 
+/// 端口监听快照（netstat 行），用于启动卡住时的诊断输出
+fn port_listen_lines(port: u16) -> String {
+    let mut cmd = Command::new("netstat");
+    cmd.args(["-ano", "-p", "tcp"]);
+    no_window(&mut cmd);
+    let out = cmd.output().ok();
+    let text = out
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+    let needle = format!(":{}", port);
+    let lines: Vec<&str> = text.lines().filter(|l| l.contains(&needle)).collect();
+    if lines.is_empty() {
+        "(无匹配的监听行)".into()
+    } else {
+        lines[..lines.len().min(8)].join("\n")
+    }
+}
+
 /// 启动服务（后台进程 + 日志流 + 端口就绪等待）
 pub fn start_impl(
     app: &AppHandle,
@@ -181,6 +199,16 @@ pub fn start_impl(
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     no_window(&mut cmd);
 
+    // 先把要执行的完整命令打到日志，方便复制到终端复现排查
+    let cmd_display = crate::process::cmd_line(env.node_exe.to_string_lossy().as_ref(), &cmd_args);
+    emit_log(app, "service:log", &format!("[命令] {}", cmd_display), "step");
+    emit_log(
+        app,
+        "service:log",
+        &format!("[命令] 工作目录：{}", data_dir().display()),
+        "dim",
+    );
+
     let mut child = cmd.spawn().map_err(|e| format!("启动服务失败: {}", e))?;
     let pid = child.id();
     let out = child.stdout.take().ok_or("stdout 不可用")?;
@@ -204,6 +232,7 @@ pub fn start_impl(
     let started = Instant::now();
     let deadline = started + Duration::from_secs(300);
     let mut last_feedback = Instant::now();
+    let mut diagnosed = false;
     let mut ready = false;
     loop {
         if probe_http(port) {
@@ -234,6 +263,33 @@ pub fn start_impl(
                 "dim",
             );
             last_feedback = Instant::now();
+        }
+        // 30 秒仍未就绪：输出一次端口监听快照，区分「端口没监听」和「监听了但 HTTP 不应答」
+        if !diagnosed && started.elapsed() >= Duration::from_secs(30) {
+            diagnosed = true;
+            let snapshot = port_listen_lines(port);
+            emit_log(app, "service:log", "[诊断] 端口监听快照（netstat）：", "warn");
+            for line in snapshot.lines() {
+                let l = line.trim();
+                if !l.is_empty() {
+                    emit_log(app, "service:log", l, "dim");
+                }
+            }
+            if snapshot.contains("LISTENING") {
+                emit_log(
+                    app,
+                    "service:log",
+                    "[诊断] 端口已监听但 HTTP 不应答：dsh 启动过程疑似被网络请求阻塞（约 21 秒/次超时）。请复制上方 [命令] 在终端手动运行观察完整输出，或检查系统代理与网络，或更换端口后重试。",
+                    "warn",
+                );
+            } else {
+                emit_log(
+                    app,
+                    "service:log",
+                    "[诊断] 进程已启动但端口尚未监听，请结合上方 [命令] 与实时输出排查。",
+                    "warn",
+                );
+            }
         }
         if Instant::now() >= deadline {
             break;

@@ -97,6 +97,15 @@ pub fn no_window(cmd: &mut Command) {
 #[cfg(not(windows))]
 pub fn no_window(_cmd: &mut Command) {}
 
+/// 拼接可读的命令行（参数含空格时加引号），用于日志排查
+pub fn cmd_line(prog: &str, args: &[String]) -> String {
+    std::iter::once(prog.to_string())
+        .chain(args.iter().cloned())
+        .map(|p| if p.contains(' ') { format!("\"{}\"", p) } else { p })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 /// 执行命令并把 stdout/stderr 逐行推送给前端
 pub fn run_stream(
     app: &AppHandle,
@@ -114,6 +123,9 @@ pub fn run_stream(
     if let Some(e) = env {
         cmd.envs(e);
     }
+    // 先把要执行的完整命令打到日志，方便用户复制到终端复现排查
+    let args_owned: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    emit_log(app, event, &format!("[命令] {}", cmd_line(prog, &args_owned)), "step");
     cmd.stdin(Stdio::null());
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
     no_window(&mut cmd);
@@ -155,16 +167,20 @@ pub fn system_proxy() -> Option<String> {
     #[cfg(windows)]
     {
         let key = r"HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings";
-        let enabled = std::process::Command::new("reg")
-            .args(["query", key, "/v", "ProxyEnable"])
+        // 必须加 CREATE_NO_WINDOW：reg.exe 是控制台程序，不加会在每次网络请求
+        // 探测系统代理时弹出一个一闪而过的终端窗口。
+        let mut enabled_cmd = std::process::Command::new("reg");
+        enabled_cmd.args(["query", key, "/v", "ProxyEnable"]);
+        no_window(&mut enabled_cmd);
+        let enabled = enabled_cmd
             .output()
             .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
             .unwrap_or_default();
         if enabled.contains("0x1") {
-            if let Ok(out) = std::process::Command::new("reg")
-                .args(["query", key, "/v", "ProxyServer"])
-                .output()
-            {
+            let mut server_cmd = std::process::Command::new("reg");
+            server_cmd.args(["query", key, "/v", "ProxyServer"]);
+            no_window(&mut server_cmd);
+            if let Ok(out) = server_cmd.output() {
                 let text = String::from_utf8_lossy(&out.stdout);
                 for line in text.lines() {
                     if let Some(idx) = line.find("REG_SZ") {
