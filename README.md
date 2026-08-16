@@ -17,10 +17,7 @@
 
 仓库收藏（Star）增长曲线，数据实时更新：
 
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=AlwaysSum/deepseek-harness-kit&type=Date&theme=dark" />
-  <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=AlwaysSum/deepseek-harness-kit&type=Date&theme=light" width="720" />
-</picture>
+![Star History Chart](https://api.star-history.com/svg?repos=AlwaysSum/deepseek-harness-kit&type=Date&theme=light)
 
 ## 功能
 
