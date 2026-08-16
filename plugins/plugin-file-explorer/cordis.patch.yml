@@ -1,0 +1,7 @@
+# @dsh-kit/plugin-file-explorer bundle patch: one row mounting the file-explorer
+# plugin. Same row carries the host half (webServer routes for fs) and the
+# browser half (dsh.client roster entry scanning into the boot set).
+- insert:
+    - id: plugin-file-explorer
+      name: '@dsh-kit/plugin-file-explorer'
+      inject: [webServer]
