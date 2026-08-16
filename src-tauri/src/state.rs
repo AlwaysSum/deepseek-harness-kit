@@ -232,22 +232,6 @@ pub fn dsh_installed() -> bool {
     dsh_marker().exists() || find_dsh_package_dir().is_some()
 }
 
-/// 解析 npx 缓存中 @deepseek-ai/dsh 的可执行入口（package.json 的 bin 指向的 JS 文件）。
-/// 用于直接用托管 Node 运行 dsh，绕开 npx 的 .cmd 脚本——那类脚本会回退到 PATH
-/// 里的系统 Node，版本过旧（如 v18 缺 parseEnv）会导致启动崩溃。
-pub fn dsh_bin_js() -> Option<PathBuf> {
-    let pkg = find_dsh_package_dir()?;
-    let txt = std::fs::read_to_string(pkg.join("package.json")).ok()?;
-    let j: serde_json::Value = serde_json::from_str(&txt).ok()?;
-    let rel = match j.get("bin")? {
-        serde_json::Value::String(s) => s.clone(),
-        serde_json::Value::Object(m) => m.values().find_map(|v| v.as_str())?.to_string(),
-        _ => return None,
-    };
-    let p = pkg.join(rel);
-    p.is_file().then_some(p)
-}
-
 pub fn dsh_version() -> Option<String> {
     if let Some(pkg) = find_dsh_package_dir() {
         if let Ok(txt) = std::fs::read_to_string(pkg.join("package.json")) {

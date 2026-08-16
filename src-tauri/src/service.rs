@@ -20,7 +20,11 @@ pub fn service_url(port: u16) -> String {
 /// 探测端口上是否有 HTTP 服务
 pub fn probe_http(port: u16) -> bool {
     let agent = ureq::AgentBuilder::new()
+        // 必须同时设读超时和连接超时：否则当端口有监听但服务事件循环卡住时，
+        // TCP 连接积压会导致每次 connect 等满 Windows 默认 21 秒才失败，
+        // 启动等待循环会每 21 秒才推进一次，误以为服务在缓慢启动。
         .timeout(Duration::from_secs(2))
+        .timeout_connect(Duration::from_secs(2))
         .user_agent("dsh-desktop/0.1.0")
         .build();
     match agent.get(&service_url(port)).call() {
@@ -161,35 +165,19 @@ pub fn start_impl(
 
     let mut penv = build_env(&[&env.node_dir]);
     penv.insert("npm_config_registry".into(), settings.registry.clone());
-
-    // 组装启动命令：优先直接用缓存包的入口 JS 运行（绕开 npx 的 .cmd 脚本，
-    // 避免它回退到 PATH 里的系统 Node，比如 v18 缺 parseEnv 导致启动崩溃）；
-    // 包未缓存时回退到 npx（需要联网下载）。
-    let cmd_args: Vec<String> = if let Some(bin) = crate::state::dsh_bin_js() {
-        emit_log(
-            app,
-            "service:log",
-            "使用本地缓存的 dsh 运行时直接启动…",
-            "dim",
-        );
-        vec![
-            bin.to_string_lossy().into_owned(),
-            "web".into(),
-            "--port".into(),
-            port.to_string(),
-        ]
-    } else {
-        // 未缓存：npx 优先使用本地缓存，避免每次启动都联网校验
-        penv.insert("npm_config_prefer_offline".into(), "true".into());
-        vec![
-            npx.to_string_lossy().into_owned(),
-            "--yes".into(),
-            DSH_PACKAGE.into(),
-            "web".into(),
-            "--port".into(),
-            port.to_string(),
-        ]
-    };
+    // 用官方 npx 指令启动（报错时 npm 会给出完整日志）。
+    // --prefer-offline 优先使用本地缓存，避免每次启动联网校验；
+    // PATH 已由 build_env 收敛为单个键并把便携版 Node 放最前，npx 内部
+    // 的 .cmd 脚本会因此用便携版 v22 运行 dsh，不会回退到系统 v18。
+    penv.insert("npm_config_prefer_offline".into(), "true".into());
+    let cmd_args: Vec<String> = vec![
+        npx.to_string_lossy().into_owned(),
+        "--yes".into(),
+        DSH_PACKAGE.into(),
+        "web".into(),
+        "--port".into(),
+        port.to_string(),
+    ];
 
     let mut cmd = Command::new(&env.node_exe);
     cmd.args(&cmd_args);
