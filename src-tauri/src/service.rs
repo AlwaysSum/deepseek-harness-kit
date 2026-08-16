@@ -58,6 +58,22 @@ pub fn kill_pid(pid: u32) -> bool {
     cmd.output().map(|o| o.status.success()).unwrap_or(false)
 }
 
+/// 查询进程可执行文件名（tasklist CSV），用于识别端口占用者是否为残留的 node 进程
+fn process_name(pid: u32) -> String {
+    let mut cmd = Command::new("tasklist");
+    cmd.args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"]);
+    no_window(&mut cmd);
+    let out = cmd.output().ok();
+    let text = out
+        .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+        .unwrap_or_default();
+    text.trim()
+        .split(',')
+        .next()
+        .map(|s| s.trim_matches('"').to_lowercase())
+        .unwrap_or_default()
+}
+
 /// 启动服务（后台进程 + 日志流 + 端口就绪等待）
 pub fn start_impl(
     app: &AppHandle,
@@ -75,6 +91,48 @@ pub fn start_impl(
             },
         );
         return Ok(());
+    }
+
+    // 端口上有监听进程但探测不到 HTTP：大概率是上次异常退出残留的 dsh/node 进程。
+    // 识别为 node.exe 时自动清理后继续启动；其他程序占用则给出明确提示。
+    if let Some(pid) = find_pid_on_port(port) {
+        let name = process_name(pid);
+        emit_log(
+            app,
+            "service:log",
+            &format!("端口 {} 被进程占用（PID {}，{}）且未响应 HTTP", port, pid, if name.is_empty() { "未知" } else { &name }),
+            "warn",
+        );
+        if name == "node.exe" {
+            emit_log(app, "service:log", "检测到残留的 Node 进程，自动清理后继续启动…", "step");
+            if !kill_pid(pid) {
+                return Err(format!(
+                    "无法清理占用端口 {} 的残留进程（PID {}），请手动结束该进程或更换端口。",
+                    port, pid
+                ));
+            }
+            let mut freed = false;
+            for _ in 0..20 {
+                if find_pid_on_port(port).is_none() {
+                    freed = true;
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            if !freed {
+                return Err(format!(
+                    "占用端口 {} 的残留进程清理超时（PID {}），请手动结束或更换端口。",
+                    port, pid
+                ));
+            }
+        } else {
+            return Err(format!(
+                "端口 {} 被其他程序占用（PID {}，{}），请在设置中更换端口或先停止该程序。",
+                port,
+                pid,
+                if name.is_empty() { "未知" } else { &name }
+            ));
+        }
     }
 
     let env = ensure_node(app, settings)?;
