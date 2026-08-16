@@ -17,6 +17,8 @@ import {
   rename as fsRename,
   rm as fsRm,
 } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { spawn } from "node:child_process";
 import { dirname, relative, resolve, sep } from "node:path";
 
 export const name = "plugin-file-explorer";
@@ -24,9 +26,8 @@ export const inject = ["webServer"];
 
 const ROUTE_PREFIX = "/dshkit-fs";
 
-/** 文本读取大小上限（字节）；图片预览单独 2MB 上限。 */
+/** 文本读取大小上限（字节）。媒体文件走 /media 流式读取，不受此限制。 */
 const MAX_TEXT_BYTES = 5 * 1024 * 1024;
-const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 const IMAGE_MIME = {
   png: "image/png",
   jpg: "image/jpeg",
@@ -37,7 +38,16 @@ const IMAGE_MIME = {
   bmp: "image/bmp",
   ico: "image/x-icon",
 };
-const IMAGE_EXTS = new Set(Object.keys(IMAGE_MIME));
+const VIDEO_MIME = {
+  mp4: "video/mp4",
+  m4v: "video/mp4",
+  webm: "video/webm",
+  ogv: "video/ogg",
+  ogg: "video/ogg",
+  mov: "video/quicktime",
+};
+/** /media 支持的媒体类型（图片 + 视频），供 webview 内 <img>/<video> 直接引用。 */
+const MEDIA_MIME = { ...IMAGE_MIME, ...VIDEO_MIME };
 
 /** Loopback / trusted-host guard (mirrors the /plugin-market fence). */
 function isTrustedRequest(req) {
@@ -322,19 +332,8 @@ export function apply(ctx) {
             if (!root) return sendJson(res, 200, { ok: false, error: "no session dir" });
             const target = safeResolve(root, rel);
             if (!target) return sendJson(res, 200, { ok: false, error: "invalid path" });
-            let st;
-            try {
-              st = await fsStat(target);
-            } catch {
-              return sendJson(res, 200, { ok: false, error: "not found" });
-            }
-            // 图片：直接读 buffer 回 base64，走只读预览。
-            const ext = String(target).toLowerCase().split(".").pop() ?? "";
-            if (IMAGE_EXTS.has(ext)) {
-              if (st.size > MAX_IMAGE_BYTES) return sendJson(res, 200, { ok: false, error: "too large" });
-              const buf = await fsReadFile(target);
-              return sendJson(res, 200, { ok: true, kind: "image", mime: IMAGE_MIME[ext], base64: buf.toString("base64") });
-            }
+            const st = await fsStat(target).catch(() => null);
+            if (!st || !st.isFile()) return sendJson(res, 200, { ok: false, error: "not found" });
             // 文本：大小上限 + NUL 字节二进制嗅探。
             if (st.size > MAX_TEXT_BYTES) return sendJson(res, 200, { ok: false, error: "too large" });
             const content = await readFileWithFallback(ctx, target);
@@ -496,5 +495,121 @@ export function apply(ctx) {
         },
       }),
     "plugin-file-explorer: route /delete"
+  );
+
+  ctx.effect(
+    () =>
+      ctx.webServer.register({
+        kind: "exact",
+        path: `${ROUTE_PREFIX}/media`,
+        handler: async (req, res) => {
+          if (!isTrustedRequest(req)) return sendJson(res, 403, { error: "forbidden" });
+          if (req.method !== "GET") return sendJson(res, 405, { error: "method not allowed" });
+          const url = new URL(req.url ?? "/", "http://x");
+          const session = url.searchParams.get("session") ?? "";
+          const rel = url.searchParams.get("path") ?? "";
+          try {
+            const root = await resolveSessionDir(ctx, session);
+            if (!root) return sendJson(res, 200, { ok: false, error: "no session dir" });
+            const target = safeResolve(root, rel);
+            if (!target) return sendJson(res, 200, { ok: false, error: "invalid path" });
+            const st = await fsStat(target).catch(() => null);
+            if (!st || !st.isFile()) return sendJson(res, 200, { ok: false, error: "not found" });
+            const ext = String(target).toLowerCase().split(".").pop() ?? "";
+            const mime = MEDIA_MIME[ext];
+            if (!mime) return sendJson(res, 200, { ok: false, error: "unsupported" });
+            // 支持 Range 以便 <video> 拖动进度 / seek。
+            const range = req.headers.range;
+            if (range) {
+              const m = /bytes=(\d*)-(\d*)/.exec(range);
+              if (m) {
+                const start = m[1] ? parseInt(m[1], 10) : 0;
+                const end = m[2] ? Math.min(parseInt(m[2], 10), st.size - 1) : st.size - 1;
+                if (start <= end && start < st.size) {
+                  res.writeHead(206, {
+                    "content-type": mime,
+                    "content-length": end - start + 1,
+                    "content-range": `bytes ${start}-${end}/${st.size}`,
+                    "accept-ranges": "bytes",
+                    "cache-control": "no-store",
+                  });
+                  createReadStream(target, { start, end }).pipe(res);
+                  return;
+                }
+              }
+            }
+            res.writeHead(200, {
+              "content-type": mime,
+              "content-length": st.size,
+              "accept-ranges": "bytes",
+              "cache-control": "no-store",
+            });
+            createReadStream(target).pipe(res);
+          } catch (error) {
+            sendJson(res, 200, {
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        },
+      }),
+    "plugin-file-explorer: route /media"
+  );
+
+  ctx.effect(
+    () =>
+      ctx.webServer.register({
+        kind: "exact",
+        path: `${ROUTE_PREFIX}/open`,
+        handler: async (req, res) => {
+          if (!isTrustedRequest(req)) return sendJson(res, 403, { error: "forbidden" });
+          if (req.method !== "POST") return sendJson(res, 405, { error: "method not allowed" });
+          let body;
+          try {
+            body = await readBody(req);
+          } catch (error) {
+            return sendJson(res, 400, {
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+          const session = typeof body?.session === "string" ? body.session : "";
+          const rel = typeof body?.path === "string" ? body.path : "";
+          try {
+            const root = await resolveSessionDir(ctx, session);
+            if (!root) return sendJson(res, 200, { ok: false, error: "no session dir" });
+            const target = safeResolve(root, rel);
+            if (!target) return sendJson(res, 200, { ok: false, error: "invalid path" });
+            const st = await fsStat(target).catch(() => null);
+            if (!st || !st.isFile()) return sendJson(res, 200, { ok: false, error: "not found" });
+            // 调用系统默认应用打开（Windows: explorer 关联；macOS: open；Linux: xdg-open）。
+            const cmd =
+              process.platform === "win32"
+                ? ["explorer.exe", String(target)]
+                : process.platform === "darwin"
+                  ? ["open", String(target)]
+                  : ["xdg-open", String(target)];
+            let sent = false;
+            const child = spawn(cmd[0], cmd.slice(1), { detached: true, stdio: "ignore" });
+            child.on("error", () => {
+              if (sent) return;
+              sent = true;
+              sendJson(res, 200, { ok: false, error: "无法调用系统默认应用" });
+            });
+            child.on("spawn", () => {
+              if (sent) return;
+              sent = true;
+              sendJson(res, 200, { ok: true });
+            });
+            child.unref();
+          } catch (error) {
+            sendJson(res, 200, {
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        },
+      }),
+    "plugin-file-explorer: route /open"
   );
 }

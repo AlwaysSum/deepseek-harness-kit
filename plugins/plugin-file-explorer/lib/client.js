@@ -65,6 +65,9 @@ window.__ModuleLoader__.load({
       ".dfx-editorWrap textarea{flex:1;box-sizing:border-box;border:none;outline:none;resize:none;padding:10px;background:var(--dsw-alias-bg-layer-1,#15181f);color:var(--dsw-alias-label-primary,#eceff4);font-family:Consolas,monospace;font-size:12.5px;line-height:20px;min-height:120px}",
       ".dfx-imagePreview{flex:1;min-height:0;overflow:auto;display:flex;align-items:flex-start;justify-content:center;padding:16px}",
       ".dfx-imagePreview img{max-width:100%;max-height:100%;object-fit:contain;border-radius:8px}",
+      ".dfx-mediaPreview{flex:1;min-height:0;overflow:auto;display:flex;align-items:center;justify-content:center;padding:16px}",
+      ".dfx-mediaPreview video{max-width:100%;max-height:100%;object-fit:contain;border-radius:8px;background:#000}",
+      ".dfx-docBar{flex:none;display:flex;align-items:center;gap:10px;padding:14px 2px}",
       ".dfx-cmHost{flex:1;min-height:0;overflow:hidden}",
       ".dfx-cmHost .CodeMirror{height:100%;font-family:Consolas,monospace;font-size:12.5px;line-height:20px;background:var(--dsw-alias-bg-layer-1,#15181f);color:var(--dsw-alias-label-primary,#eceff4)}",
       ".dfx-cmHost .CodeMirror-gutters{background:var(--dsw-alias-bg-layer-1,#15181f);border-right:1px solid var(--dsw-alias-border-l2,#343b48)}",
@@ -512,13 +515,17 @@ window.__ModuleLoader__.load({
       return EXT_TO_MODE[ext] || null;
     }
 
-    // 图片扩展名（与 host /read 的 IMAGE_EXTS 对齐），用于打开时分派只读预览。
+    // 图片 / 视频 / 文档扩展名（与 host 路由对齐）。
     const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"]);
+    const VIDEO_EXTS = new Set(["mp4", "m4v", "webm", "ogv", "ogg", "mov"]);
+    const DOC_EXTS = new Set(["doc", "docx", "xls", "xlsx", "ppt", "pptx", "pdf", "rtf", "odt", "ods", "odp", "wps", "et", "dps"]);
 
-    /** 按扩展名决定 Tab 内容组件类型：image | json | markdown | html | text。 */
+    /** 按扩展名决定 Tab 内容组件类型：image | video | doc | json | markdown | html | text。 */
     function editorKindForPath(path) {
       const ext = String(path).toLowerCase().split(".").pop() || "";
       if (IMAGE_EXTS.has(ext)) return "image";
+      if (VIDEO_EXTS.has(ext)) return "video";
+      if (DOC_EXTS.has(ext)) return "doc";
       if (ext === "json") return "json";
       if (ext === "md" || ext === "markdown") return "markdown";
       if (ext === "html" || ext === "htm") return "html";
@@ -705,7 +712,7 @@ window.__ModuleLoader__.load({
       const [loaded, setLoaded] = useState(false);
       const [dirty, setDirty] = useState(false);
       const [loadErr, setLoadErr] = useState("");
-      const [imageSrc, setImageSrc] = useState("");
+      const [mediaErr, setMediaErr] = useState("");
       const [useCM, setUseCM] = useState(false);
       const gutterRef = useRef(null);
       const areaRef = useRef(null);
@@ -715,13 +722,22 @@ window.__ModuleLoader__.load({
       const dirtyRef = useRef(dirty);
       dirtyRef.current = dirty;
       const ekind = editorKindForPath(filePath);
+      const mediaUrl = `/dshkit-fs/media?session=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(filePath)}`;
 
       useEffect(() => {
         let cancelled = false;
-        setStatus("加载中…");
+        setStatus("");
         setLoaded(false);
         setLoadErr("");
+        setMediaErr("");
         setUseCM(false);
+        // 图片 / 视频走 /media 流式 webview，doc 走系统默认应用，均无需 fetch 文本内容。
+        if (ekind === "image" || ekind === "video" || ekind === "doc") {
+          return () => {
+            cancelled = true;
+          };
+        }
+        setStatus("加载中…");
         fetch(`/dshkit-fs/read?session=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(filePath)}`)
           .then((r) => r.json())
           .then((d) => {
@@ -731,11 +747,6 @@ window.__ModuleLoader__.load({
               else if (d.error === "too large") setLoadErr("文件过大，拒绝读取");
               else setLoadErr("读取失败：" + d.error);
               setLoaded(false);
-              return;
-            }
-            if (d.kind === "image") {
-              setImageSrc(`data:${d.mime};base64,${d.base64}`);
-              setStatus("");
               return;
             }
             setContent(d.content ?? "");
@@ -752,7 +763,7 @@ window.__ModuleLoader__.load({
         return () => {
           cancelled = true;
         };
-      }, [filePath, sessionId]);
+      }, [filePath, sessionId, ekind]);
 
       const save = () => {
         if (ekind === "json") {
@@ -811,6 +822,21 @@ window.__ModuleLoader__.load({
       const requestClose = () => {
         if (dirtyRef.current && !window.confirm("文件尚未保存，确定关闭？未保存的修改将丢失。")) return;
         window.dispatchEvent(new CustomEvent("dshkit:closefile", { detail: { path: filePath } }));
+      };
+
+      const openWithSystem = async () => {
+        setStatus("正在调用系统默认应用…");
+        try {
+          const r = await fetch("/dshkit-fs/open", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ session: sessionId, path: filePath }),
+          });
+          const d = await r.json();
+          setStatus(d.ok ? "已调用系统默认应用打开" : "打开失败：" + (d.error || ""));
+        } catch (e) {
+          setStatus("打开失败：" + e.message);
+        }
       };
 
       // CodeMirror 初始化（可选高亮，失败回退纯 textarea；json 复用 javascript 高亮）。
@@ -912,8 +938,9 @@ window.__ModuleLoader__.load({
         });
       }
 
-      // 图片：只读预览
-      if (ekind === "image") {
+      // 图片 / 视频：专用媒体 webview（/media 流式，支持 Range 拖动进度）
+      if (ekind === "image" || ekind === "video") {
+        const isVideo = ekind === "video";
         return jsxs("div", {
           className: "dfx-editor",
           children: [
@@ -921,11 +948,49 @@ window.__ModuleLoader__.load({
               className: "dfx-editorChrome",
               children: [
                 jsx("span", { className: "dfx-editorName", children: fileLabel }),
-                jsx("span", { className: "dfx-status", children: imageSrc ? "（图片预览 · 只读）" : "加载中…" }),
+                jsx("span", { className: "dfx-status", children: isVideo ? "（视频预览 · 只读）" : "（图片预览 · 只读）" }),
                 jsx("button", { type: "button", className: "dfx-btn", onClick: requestClose, children: "关闭" }),
               ],
             }),
-            imageSrc ? jsx("div", { className: "dfx-imagePreview", children: jsx("img", { src: imageSrc, alt: fileLabel }) }) : null,
+            mediaErr
+              ? jsx("div", { className: "dfx-empty", children: mediaErr })
+              : isVideo
+                ? jsx("div", {
+                    className: "dfx-mediaPreview",
+                    children: jsx("video", { src: mediaUrl, controls: true, preload: "metadata", onError: () => setMediaErr("视频加载失败，文件可能已移动或删除"), children: jsx("track", { kind: "captions" }) }),
+                  })
+                : jsx("div", {
+                    className: "dfx-imagePreview",
+                    children: jsx("img", { src: mediaUrl, alt: fileLabel, onError: () => setMediaErr("图片加载失败，文件可能已移动或删除") }),
+                  }),
+          ],
+        });
+      }
+
+      // doc / excel / ppt / pdf 等：提示用系统默认应用打开
+      if (ekind === "doc") {
+        return jsxs("div", {
+          className: "dfx-editor",
+          children: [
+            jsx("div", {
+              className: "dfx-editorChrome",
+              children: [
+                jsx("span", { className: "dfx-editorName", children: fileLabel }),
+                jsx("span", { className: "dfx-status", children: "（文档 · 不支持在线编辑）" }),
+                jsx("button", { type: "button", className: "dfx-btn", onClick: requestClose, children: "关闭" }),
+              ],
+            }),
+            jsx("div", {
+              className: "dfx-empty",
+              children: "这是文档文件（Word / Excel / PPT / PDF 等），不支持在线编辑。请使用系统默认应用打开。",
+            }),
+            jsx("div", {
+              className: "dfx-docBar",
+              children: [
+                jsx("button", { type: "button", className: "dfx-btn dfx-btn-primary", onClick: openWithSystem, children: "用系统默认应用打开" }),
+                status ? jsx("span", { className: "dfx-status", children: status }) : null,
+              ],
+            }),
           ],
         });
       }

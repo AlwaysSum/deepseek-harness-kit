@@ -76,8 +76,11 @@ DeepSeek Harness（dsh）web 客户端默认布局：左侧为「会话」浏览
 ### FR4 会话列表（保持现状）
 - 会话 Tab 列出 profile 会话（mtime 倒序），点击切换当前会话；当前会话高亮；文件树随当前会话切换。
 
-### FR5 非文本文件只读预览（可选增强）
-- 扩展名白名单判定：图片（png/jpg/gif/webp/svg 等）渲染 `<img>`（base64 data URL，大小上限如 2MB）；其余二进制提示「二进制文件，不支持编辑」；超大文本（>512KB）只读。
+### FR5 媒体与文档文件（图片/视频 webview、doc 系统默认应用）
+- FR5.1 图片（png/jpg/gif/webp/svg/bmp/ico）打开为**专用媒体 webview**：`/dshkit-fs/media` 流式输出（content-type + accept-ranges），`<img>` 直接引用，无大小上限（流式不占内存）。
+- FR5.2 视频（mp4/webm/ogv/ogg/mov）打开为**专用媒体 webview**：同一 `/media` 路由，支持 **Range 请求**（206 分段响应）以便 `<video>` 拖动进度 / seek；`preload="metadata"`。
+- FR5.3 文档类（doc/docx/xls/xlsx/ppt/pptx/pdf/rtf/odt/ods/odp/wps/et/dps）打开后**提示不支持在线编辑**，提供「用系统默认应用打开」按钮 → `/dshkit-fs/open` 调用系统默认应用（Windows `explorer.exe` / macOS `open` / Linux `xdg-open`，detached + unref）。
+- FR5.4 其余二进制：文本读取 NUL 嗅探 → 提示「二进制文件，不支持编辑」；超大文本（>5MB）拒绝读取。
 
 ---
 
@@ -132,6 +135,8 @@ DeepSeek Harness（dsh）web 客户端默认布局：左侧为「会话」浏览
 | `/dshkit-fs/create` | POST | `{session, dir, name, kind:"file"\|"dir", content?}` | `{ok, path}` | 在 `dir` 下创建文件/文件夹；重名或名称为空/含 `/\0` 报错 |
 | `/dshkit-fs/rename` | POST | `{session, path, name}` | `{ok, path}` | 重命名文件/目录；目标重名报错 |
 | `/dshkit-fs/delete` | POST | `{session, path}` | `{ok}` | 删除文件；目录递归删除（host 侧确认存在性） |
+| `/dshkit-fs/media` | GET | `session`, `path` | 原始字节流 | 图片/视频流式输出；支持 `Range`（206 分段，供 `<video>` seek）；扩展名不在媒体白名单返回 `unsupported` |
+| `/dshkit-fs/open` | POST | `{session, path}` | `{ok}` | 用系统默认应用打开文件（Windows `explorer.exe` / macOS `open` / Linux `xdg-open`） |
 
 响应错误码：`invalid path`（越权）/ `exists`（重名）/ `not found` / 系统错误透传 message。
 
@@ -144,7 +149,7 @@ DeepSeek Harness（dsh）web 客户端默认布局：左侧为「会话」浏览
 | 1 | 标签环无法内嵌 × 关闭按钮（平台约束） | 关闭入口=编辑器 chrome 关闭按钮 + Ctrl+W；spec 明确告知用户此限制 |
 | 2 | 实时脏标记放 Tab label 不可靠 | 脏标记放编辑器 chrome；Tab label 保持纯文件名 |
 | 3 | 关闭文件的确认：文件 Tab 仅 active 时可见其 chrome | 关闭动作必然发生在 active 文件上（非 active 文件的关闭走 Ctrl+W 需要 active 化后触发），确认逻辑集中在编辑器内即可 |
-| 4 | 二进制/超大文件 utf8 读取乱码或卡顿 | host `/read` 加大小上限（如 5MB）+ 二进制嗅探（NUL 字节）；浏览器端按扩展名白名单分流 FR5 |
+| 4 | 二进制/超大文件 utf8 读取乱码或卡顿 | 文本 `/read` 加 5MB 上限 + NUL 二进制嗅探；图片/视频走 `/media` 流式（无上限、不占内存）；浏览器端按扩展名白名单分流 FR5 |
 | 5 | 语法高亮 CDN 依赖网络 | 加载失败/超时回退纯 textarea；CDN 地址做成常量便于替换 |
 | 6 | 切换会话后文件 Tab 残留 | 订阅 `sessions.list`，current 变化时 dispose 全部文件 Tab 并清空 viewStore |
 | 7 | 目录递归删除误删 | 删除前二次确认；host 限制仅允许删工作区根之下 |
