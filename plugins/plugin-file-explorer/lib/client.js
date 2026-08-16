@@ -22,7 +22,7 @@ window.__ModuleLoader__.load({
     let runtimectx = require("@deepseek-ai/dsh-client-runtime/client");
 
     const { jsx, jsxs, Fragment } = react_jsx_runtime;
-    const { useState, useEffect, useRef, useCallback } = react;
+    const { useState, useEffect, useRef, useCallback, useMemo } = react;
     const defineStore = runtimectx && runtimectx.defineStore;
     const resolveWorkspacePath = runtimectx && runtimectx.resolveWorkspacePath;
 
@@ -82,6 +82,16 @@ window.__ModuleLoader__.load({
       ".dfx-cmHost .cm-s-default .cm-operator,.dfx-cmHost .cm-s-default .cm-punctuation{color:#d4d4d4}",
       ".dfx-cmHost .cm-s-default .cm-tag{color:#569cd6}",
       ".dfx-cmHost .cm-s-default .cm-builtin{color:#4ec9b0}",
+      // json / markdown / html viewers
+      ".dfx-jsonBar{flex:none;display:flex;align-items:center;gap:8px;padding:0 2px 6px;flex-wrap:wrap}",
+      ".dfx-jsonOk{color:var(--dsw-alias-label-tertiary,#7d8592);font-size:11px;line-height:16px}",
+      ".dfx-jsonErr{color:var(--dsw-alias-state-error-primary,#f85149);font-size:11px;line-height:16px}",
+      ".dfx-split{flex:1;min-height:0;display:flex;gap:8px}",
+      ".dfx-splitPane{flex:1;min-width:0;display:flex;flex-direction:column}",
+      ".dfx-splitEditor{flex:1;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2,#343b48);outline:none;resize:none;padding:10px;border-radius:8px;background:var(--dsw-alias-bg-layer-1,#15181f);color:var(--dsw-alias-label-primary,#eceff4);font-family:Consolas,monospace;font-size:12.5px;line-height:20px;min-height:120px}",
+      ".dfx-splitPreview{flex:1;width:100%;box-sizing:border-box;border:1px solid var(--dsw-alias-border-l2,#343b48);border-radius:8px;background:#fff}",
+      ".dfx-htmlBar{flex:none;display:flex;align-items:center;gap:8px;padding:0 2px 6px}",
+      ".dfx-splitLabel{color:var(--dsw-alias-label-tertiary,#7d8592);font-size:11px;line-height:16px;flex:none}",
       ".dfx-btn{cursor:pointer;border:1px solid var(--dsw-alias-border-l2,#343b48);background:none;color:var(--dsw-alias-label-primary,#eceff4);font:inherit;font-size:12px;border-radius:7px;padding:4px 12px}",
       ".dfx-btn:hover{background:var(--dsw-alias-interactive-bg-hover,rgba(255,255,255,.06))}",
       ".dfx-btn-primary{border-color:var(--dsw-alias-state-business-primary,#4c8dff);color:#fff;background:var(--dsw-alias-state-business-primary,#4c8dff)}",
@@ -502,12 +512,199 @@ window.__ModuleLoader__.load({
       return EXT_TO_MODE[ext] || null;
     }
 
+    // 图片扩展名（与 host /read 的 IMAGE_EXTS 对齐），用于打开时分派只读预览。
+    const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"]);
+
+    /** 按扩展名决定 Tab 内容组件类型：image | json | markdown | html | text。 */
+    function editorKindForPath(path) {
+      const ext = String(path).toLowerCase().split(".").pop() || "";
+      if (IMAGE_EXTS.has(ext)) return "image";
+      if (ext === "json") return "json";
+      if (ext === "md" || ext === "markdown") return "markdown";
+      if (ext === "html" || ext === "htm") return "html";
+      return "text";
+    }
+
+    //#region markdown 轻量渲染（无第三方依赖，离线可用）
+    function escapeHtml(s) {
+      return String(s)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;");
+    }
+    function inlineMd(s) {
+      let out = escapeHtml(s);
+      out = out.replace(/`([^`]+)`/g, "<code>$1</code>");
+      out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+      out = out.replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>");
+      out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noreferrer">$1</a>');
+      return out;
+    }
+    function renderMarkdown(src) {
+      const lines = String(src ?? "").split("\n");
+      const html = [];
+      let inCode = false;
+      let codeBuf = [];
+      let listOpen = false;
+      let quoteBuf = [];
+      const closeList = () => {
+        if (listOpen) {
+          html.push("</ul>");
+          listOpen = false;
+        }
+      };
+      const flushQuote = () => {
+        if (quoteBuf.length) {
+          html.push("<blockquote>" + quoteBuf.join("<br>") + "</blockquote>");
+          quoteBuf = [];
+        }
+      };
+      for (const line of lines) {
+        const fence = line.match(/^```([\w+-]*)\s*$/);
+        if (fence) {
+          closeList();
+          flushQuote();
+          if (inCode) {
+            html.push("<pre><code>" + escapeHtml(codeBuf.join("\n")) + "</code></pre>");
+            codeBuf = [];
+            inCode = false;
+          } else inCode = true;
+          continue;
+        }
+        if (inCode) {
+          codeBuf.push(line);
+          continue;
+        }
+        const h = line.match(/^(#{1,4})\s+(.*)$/);
+        if (h) {
+          closeList();
+          flushQuote();
+          const lv = h[1].length;
+          html.push("<h" + lv + ">" + inlineMd(h[2]) + "</h" + lv + ">");
+          continue;
+        }
+        if (/^[-*]\s+/.test(line)) {
+          flushQuote();
+          if (!listOpen) {
+            html.push("<ul>");
+            listOpen = true;
+          }
+          html.push("<li>" + inlineMd(line.replace(/^[-*]\s+/, "")) + "</li>");
+          continue;
+        }
+        if (/^>\s?/.test(line)) {
+          closeList();
+          quoteBuf.push(inlineMd(line.replace(/^>\s?/, "")));
+          continue;
+        }
+        closeList();
+        flushQuote();
+        if (line.trim() === "") continue;
+        html.push("<p>" + inlineMd(line) + "</p>");
+      }
+      if (inCode) html.push("<pre><code>" + escapeHtml(codeBuf.join("\n")) + "</code></pre>");
+      closeList();
+      flushQuote();
+      return html.join("\n");
+    }
+    //#endregion
+
+    //#region markdown / html 分屏编辑预览组件
+    const MD_PREVIEW_CSS = [
+      "body{background:#15181f;color:#eceff4;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px;line-height:1.7;padding:16px;margin:0;box-sizing:border-box}",
+      "pre,code{font-family:Consolas,monospace;font-size:12px}",
+      "pre{background:#0d1117;border:1px solid #343b48;border-radius:6px;padding:10px;overflow:auto}",
+      "code{background:rgba(255,255,255,.08);padding:1px 5px;border-radius:4px}",
+      "pre code{background:none;padding:0;border:none}",
+      "h1,h2,h3,h4{border-bottom:1px solid #343b48;padding-bottom:6px}",
+      "a{color:#4c8dff}",
+      "blockquote{border-left:3px solid #4c8dff;margin:8px 0;padding:2px 12px;color:#aab1bd}",
+      "ul{padding-left:22px}",
+      "table{border-collapse:collapse}th,td{border:1px solid #343b48;padding:4px 10px}",
+    ].join("");
+
+    function MarkdownEditor({ content, onChange, onKeyDown }) {
+      const html = useMemo(() => renderMarkdown(content), [content]);
+      const doc = useMemo(
+        () => '<!doctype html><html><head><meta charset="utf-8"><style>' + MD_PREVIEW_CSS + "</style></head><body>" + html + "</body></html>",
+        [html]
+      );
+      return jsxs("div", {
+        className: "dfx-split",
+        children: [
+          jsx("div", {
+            className: "dfx-splitPane",
+            children: [
+              jsx("div", { className: "dfx-splitLabel", children: "编辑（Markdown）" }),
+              jsx("textarea", {
+                className: "dfx-splitEditor",
+                value: content,
+                onChange: onChange,
+                onKeyDown,
+                spellCheck: false,
+                placeholder: "输入 Markdown…",
+              }),
+            ],
+          }),
+          jsx("div", {
+            className: "dfx-splitPane",
+            children: [
+              jsx("div", { className: "dfx-splitLabel", children: "预览" }),
+              jsx("iframe", { className: "dfx-splitPreview", srcDoc: doc, sandbox: "", title: "markdown 预览" }),
+            ],
+          }),
+        ],
+      });
+    }
+
+    function HtmlEditor({ content, onChange, onKeyDown }) {
+      const [doc, setDoc] = useState(content);
+      useEffect(() => {
+        const t = setTimeout(() => setDoc(content), 300);
+        return () => clearTimeout(t);
+      }, [content]);
+      return jsxs("div", {
+        className: "dfx-root",
+        children: [
+          jsx("div", { className: "dfx-htmlBar", children: jsx("span", { className: "dfx-splitLabel", children: "预览延迟 300ms 自动刷新（沙箱内允许脚本）" }) }),
+          jsxs("div", {
+            className: "dfx-split",
+            children: [
+              jsx("div", {
+                className: "dfx-splitPane",
+                children: [
+                  jsx("div", { className: "dfx-splitLabel", children: "编辑（HTML）" }),
+                  jsx("textarea", {
+                    className: "dfx-splitEditor",
+                    value: content,
+                    onChange: onChange,
+                    onKeyDown,
+                    spellCheck: false,
+                    placeholder: "输入 HTML…",
+                  }),
+                ],
+              }),
+              jsx("div", {
+                className: "dfx-splitPane",
+                children: [
+                  jsx("div", { className: "dfx-splitLabel", children: "预览" }),
+                  jsx("iframe", { className: "dfx-splitPreview", srcDoc: doc, sandbox: "allow-scripts allow-modals allow-forms", title: "html 预览" }),
+                ],
+              }),
+            ],
+          }),
+        ],
+      });
+    }
+    //#endregion
+
     function FileEditorTab({ filePath, fileName, sessionId }) {
       const [content, setContent] = useState("");
       const [status, setStatus] = useState("");
       const [loaded, setLoaded] = useState(false);
       const [dirty, setDirty] = useState(false);
-      const [kind, setKind] = useState("text"); // text | image | error
+      const [loadErr, setLoadErr] = useState("");
       const [imageSrc, setImageSrc] = useState("");
       const [useCM, setUseCM] = useState(false);
       const gutterRef = useRef(null);
@@ -517,33 +714,26 @@ window.__ModuleLoader__.load({
       contentRef.current = content;
       const dirtyRef = useRef(dirty);
       dirtyRef.current = dirty;
+      const ekind = editorKindForPath(filePath);
 
       useEffect(() => {
         let cancelled = false;
         setStatus("加载中…");
         setLoaded(false);
-        setKind("text");
+        setLoadErr("");
         setUseCM(false);
         fetch(`/dshkit-fs/read?session=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(filePath)}`)
           .then((r) => r.json())
           .then((d) => {
             if (cancelled) return;
             if (!d.ok) {
-              if (d.error === "binary") {
-                setKind("error");
-                setStatus("二进制文件，不支持编辑");
-              } else if (d.error === "too large") {
-                setKind("error");
-                setStatus("文件过大，拒绝读取");
-              } else {
-                setKind("error");
-                setStatus("读取失败：" + d.error);
-              }
+              if (d.error === "binary") setLoadErr("二进制文件，不支持编辑");
+              else if (d.error === "too large") setLoadErr("文件过大，拒绝读取");
+              else setLoadErr("读取失败：" + d.error);
               setLoaded(false);
               return;
             }
             if (d.kind === "image") {
-              setKind("image");
               setImageSrc(`data:${d.mime};base64,${d.base64}`);
               setStatus("");
               return;
@@ -555,8 +745,7 @@ window.__ModuleLoader__.load({
           })
           .catch((e) => {
             if (!cancelled) {
-              setKind("error");
-              setStatus("读取失败：" + e.message);
+              setLoadErr("读取失败：" + e.message);
               setContent("");
             }
           });
@@ -566,6 +755,14 @@ window.__ModuleLoader__.load({
       }, [filePath, sessionId]);
 
       const save = () => {
+        if (ekind === "json") {
+          try {
+            JSON.parse(contentRef.current);
+          } catch (e) {
+            setStatus("JSON 不合法，无法保存：" + e.message);
+            return;
+          }
+        }
         setStatus("保存中…");
         fetch("/dshkit-fs/write", {
           method: "POST",
@@ -582,14 +779,43 @@ window.__ModuleLoader__.load({
           .catch((e) => setStatus("保存失败：" + e.message));
       };
 
+      const formatJson = (pretty) => {
+        try {
+          const obj = JSON.parse(contentRef.current);
+          setContent(JSON.stringify(obj, null, pretty ? 2 : 0));
+          setDirty(true);
+          setStatus("");
+        } catch (e) {
+          setStatus("格式化失败：" + e.message);
+        }
+      };
+
+      const jsonCheck =
+        ekind === "json"
+          ? (() => {
+              try {
+                JSON.parse(content);
+                return { ok: true };
+              } catch (e) {
+                return { ok: false, msg: e.message };
+              }
+            })()
+          : null;
+
+      const onContentChange = (e) => {
+        setContent(e.currentTarget.value);
+        setDirty(true);
+        setStatus("");
+      };
+
       const requestClose = () => {
         if (dirtyRef.current && !window.confirm("文件尚未保存，确定关闭？未保存的修改将丢失。")) return;
         window.dispatchEvent(new CustomEvent("dshkit:closefile", { detail: { path: filePath } }));
       };
 
-      // CodeMirror 初始化（可选高亮，失败回退纯 textarea）。
+      // CodeMirror 初始化（可选高亮，失败回退纯 textarea；json 复用 javascript 高亮）。
       useEffect(() => {
-        if (kind !== "text" || !loaded || useCM) return;
+        if ((ekind !== "text" && ekind !== "json") || !loaded || useCM) return;
         let cancelled = false;
         let cm = null;
         const mode = modeForPath(filePath);
@@ -635,7 +861,7 @@ window.__ModuleLoader__.load({
             } catch {}
           }
         };
-      }, [kind, loaded, filePath]); // eslint-disable-line react-hooks/exhaustive-deps
+      }, [ekind, loaded, filePath]); // eslint-disable-line react-hooks/exhaustive-deps
 
       const onKeyDown = (e) => {
         if (e.key === "Tab") {
@@ -669,23 +895,8 @@ window.__ModuleLoader__.load({
       const gutterNumbers = Array.from({ length: lineCount }, (_, i) => String(i + 1)).join("\n");
       const fileLabel = fileName || filePath.split("/").pop() || filePath;
 
-      if (kind === "image") {
-        return jsxs("div", {
-          className: "dfx-editor",
-          children: [
-            jsx("div", {
-              className: "dfx-editorChrome",
-              children: [
-                jsx("span", { className: "dfx-editorName", children: fileLabel }),
-                jsx("span", { className: "dfx-status", children: "（图片预览 · 只读）" }),
-                jsx("button", { type: "button", className: "dfx-btn", onClick: requestClose, children: "关闭" }),
-              ],
-            }),
-            jsx("div", { className: "dfx-imagePreview", children: jsx("img", { src: imageSrc, alt: fileLabel }) }),
-          ],
-        });
-      }
-      if (kind === "error") {
+      // 加载失败 / 二进制 / 超大文件
+      if (loadErr) {
         return jsxs("div", {
           className: "dfx-editor",
           children: [
@@ -696,11 +907,50 @@ window.__ModuleLoader__.load({
                 jsx("button", { type: "button", className: "dfx-btn", onClick: requestClose, children: "关闭" }),
               ],
             }),
-            jsx("div", { className: "dfx-empty", children: status }),
+            jsx("div", { className: "dfx-empty", children: loadErr }),
           ],
         });
       }
 
+      // 图片：只读预览
+      if (ekind === "image") {
+        return jsxs("div", {
+          className: "dfx-editor",
+          children: [
+            jsx("div", {
+              className: "dfx-editorChrome",
+              children: [
+                jsx("span", { className: "dfx-editorName", children: fileLabel }),
+                jsx("span", { className: "dfx-status", children: imageSrc ? "（图片预览 · 只读）" : "加载中…" }),
+                jsx("button", { type: "button", className: "dfx-btn", onClick: requestClose, children: "关闭" }),
+              ],
+            }),
+            imageSrc ? jsx("div", { className: "dfx-imagePreview", children: jsx("img", { src: imageSrc, alt: fileLabel }) }) : null,
+          ],
+        });
+      }
+
+      // markdown / html：分屏编辑 + 预览
+      if (ekind === "markdown" || ekind === "html") {
+        const Body = ekind === "markdown" ? MarkdownEditor : HtmlEditor;
+        return jsxs("div", {
+          className: "dfx-editor",
+          children: [
+            jsx("div", {
+              className: "dfx-editorChrome",
+              children: [
+                jsx("span", { className: "dfx-editorName", children: fileLabel + (dirty ? " ●" : "") }),
+                jsx("span", { className: "dfx-status", children: status || (dirty ? "（未保存）" : "") }),
+                jsx("button", { type: "button", className: "dfx-btn", onClick: requestClose, children: "关闭" }),
+                jsx("button", { type: "button", className: "dfx-btn dfx-btn-primary", onClick: save, disabled: !loaded, children: "保存" }),
+              ],
+            }),
+            jsx(Body, { content, onChange: onContentChange, onKeyDown }),
+          ],
+        });
+      }
+
+      // text / json：行号 + 语法高亮编辑体（json 额外带格式化与校验工具条）
       return jsxs("div", {
         className: "dfx-editor",
         children: [
@@ -713,6 +963,18 @@ window.__ModuleLoader__.load({
               jsx("button", { type: "button", className: "dfx-btn dfx-btn-primary", onClick: save, disabled: !loaded, children: "保存" }),
             ],
           }),
+          ekind === "json"
+            ? jsxs("div", {
+                className: "dfx-jsonBar",
+                children: [
+                  jsx("button", { type: "button", className: "dfx-toolBtn", onClick: () => formatJson(true), children: "格式化" }),
+                  jsx("button", { type: "button", className: "dfx-toolBtn", onClick: () => formatJson(false), children: "压缩" }),
+                  jsonCheck && jsonCheck.ok
+                    ? jsx("span", { className: "dfx-jsonOk", children: "JSON 合法" })
+                    : jsx("span", { className: "dfx-jsonErr", children: "JSON 错误：" + (jsonCheck ? jsonCheck.msg : "") }),
+                ],
+              })
+            : null,
           useCM
             ? jsx("div", { className: "dfx-cmHost", ref: cmHostRef })
             : jsx("div", {
@@ -722,11 +984,7 @@ window.__ModuleLoader__.load({
                   jsx("textarea", {
                     ref: areaRef,
                     value: content,
-                    onChange: (e) => {
-                      setContent(e.currentTarget.value);
-                      setDirty(true);
-                      setStatus("");
-                    },
+                    onChange: onContentChange,
                     onKeyDown,
                     onScroll: onScrollSync,
                     spellCheck: false,

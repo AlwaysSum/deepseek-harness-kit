@@ -60,7 +60,7 @@
 | 插件 | 说明 |
 | ---- | ---- |
 | `plugin-i18n-zh` | 汉化 UI：`ctx.locale.setLocale("zh")` 整体切中文 + MutationObserver DOM 兜底翻译。纯客户端。 |
-| `plugin-file-explorer` | 文件列表：侧边栏工作区改「会话 / 文件」双 Tab；文件 Tab 文件树展示当前会话工作区，支持常规文件操作（新建文件/文件夹、重命名、删除、刷新、全部展开/收起，目录行 hover 快捷入口）。点击文件后，利用 dsh 的中间标签环 `conversation.view`（list/session）动态注册一个新 Tab（label=文件名），于是中间变为「对话 \| 文件A \| 文件B …」多 Tab（默认 Tab 仍是对话、不可关闭），每个文件 Tab 是类 VS Code 编辑器（行号、Tab 缩进、Ctrl+S 保存、Ctrl+W 关闭、脏标记与未保存确认），并支持 CDN 按需加载 CodeMirror 语法高亮（离线自动回退纯文本）、图片只读预览与二进制文件拦截。host 提供 `/dshkit-fs/tree\|read\|write\|create\|rename\|delete` 路由，列目录用 `ctx.fs.listDir`（dsh 的 `host.listDirectory` 只返回目录，故需自建路由），读/写用 `ctx.fs.readText` / `ctx.fs.writeText`，均有 node:fs 兜底。 |
+| `plugin-file-explorer` | 文件列表：侧边栏工作区改「会话 / 文件」双 Tab；文件 Tab 文件树展示当前会话工作区，支持常规文件操作（新建文件/文件夹、重命名、删除、刷新、全部展开/收起，目录行 hover 快捷入口）。点击文件后，利用 dsh 的中间标签环 `conversation.view`（list/session）动态注册一个新 Tab（label=文件名），于是中间变为「对话 \| 文件A \| 文件B …」多 Tab（默认 Tab 仍是对话、不可关闭）。文件 Tab 按扩展名分派不同编辑组件：txt/代码 → 行号 + CodeMirror 语法高亮编辑；json → 专门编辑器（实时校验、格式化/压缩、非法阻止保存）；md → 左编辑右预览分屏（内置轻量 Markdown 渲染）；html → 左编辑右实时预览分屏（iframe 沙箱、300ms 防抖）；图片 → 只读预览；其余二进制 → 拦截。支持 Ctrl+S 保存、Ctrl+W 关闭、脏标记与未保存确认。host 提供 `/dshkit-fs/tree\|read\|write\|create\|rename\|delete` 路由，列目录用 `ctx.fs.listDir`（dsh 的 `host.listDirectory` 只返回目录，故需自建路由），读/写用 `ctx.fs.readText` / `ctx.fs.writeText`，均有 node:fs 兜底。 |
 | `plugin-theme-skin` | 主题换肤：`ctx.theme.overrideTokens()` 覆盖 `--dsw-alias-*` 令牌色（品牌色/底色/面板色/边框/文字/状态色/侧边栏色），即时生效；并注入固定全屏媒体层做背景，支持图片与 GIF / APNG / 动态 WebP 等动态图，以及 MP4 / WebM / OGG 等视频（自动静音循环）。开启背景时把应用表面背景令牌覆盖为半透明让背景透出，叠加可调遮罩保证可读。本地文件经 IndexedDB 持久化，远程 URL 直接引用；配置写入 `settingsScope`（host 设置文档）与 localStorage。设置入口：设置 → 主题换肤。纯客户端。 |
 
 > 插件市场（安装新插件到本目录）由**桌面端**侧边栏的「插件市场」面板提供：
