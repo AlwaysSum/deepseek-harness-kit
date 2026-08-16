@@ -1,10 +1,25 @@
-//! 更新检查：对接 GitHub Releases（AlwaysSum/deepseek-harness-kit）。
+//! 更新检查：对接 GitCode Releases（Sunflower816/deepseek-harness-kit）。
+//!
+//! GitCode 兼容 Gitee OpenAPI v5，公开仓库的 Releases 只读接口无需 access_token，
+//! 桌面端客户端可直接调用；安装包附件挂在 release 的 assets 中（type == "attach"）。
 
 use serde::Serialize;
 use std::time::Duration;
 use tauri::AppHandle;
 
-pub const UPDATE_REPO: &str = "AlwaysSum/deepseek-harness-kit";
+pub const UPDATE_REPO: &str = "Sunflower816/deepseek-harness-kit";
+const API_BASE: &str = "https://gitcode.com/api/v5/repos";
+const DL_BASE: &str = "https://gitcode.com";
+
+/// GitCode Releases API 仓库根
+fn api() -> String {
+    format!("{}/{}", API_BASE, UPDATE_REPO)
+}
+
+/// 某个版本的 Release 页面地址（GitCode 返回的 JSON 没有 html_url，自行拼接）
+fn release_url(tag: &str) -> String {
+    format!("{}/{}/releases/tag/{}", DL_BASE, UPDATE_REPO, tag)
+}
 
 #[derive(Serialize, Clone, Default)]
 pub struct UpdateInfo {
@@ -65,59 +80,46 @@ fn agent() -> ureq::Agent {
     .build()
 }
 
-/// 检查 GitHub Releases 最新版本
+/// 从 release 的 assets 中找本版本对应的安装包附件。
+/// 优先精确匹配「dsh-desktop_{版本}_x64-setup.exe」，避免同一 Release 里残留的历史
+/// 安装包（GitCode 历史版本曾混入旧包）；兜底取任意 x64 setup 附件。
+/// Returns (asset_name, browser_download_url)。
+fn find_installer_asset(assets: Option<&serde_json::Value>, tag: &str) -> Option<(String, String)> {
+    let arr = assets?.as_array()?;
+    let wanted = asset_name_for(tag);
+    let mut fallback = None;
+    for a in arr {
+        let n = a.get("name").and_then(|x| x.as_str()).unwrap_or("");
+        let t = a.get("type").and_then(|x| x.as_str()).unwrap_or("");
+        if t != "attach" {
+            continue;
+        }
+        let url = a
+            .get("browser_download_url")
+            .and_then(|u| u.as_str())
+            .unwrap_or("");
+        if url.is_empty() {
+            continue;
+        }
+        if n == wanted {
+            return Some((n.to_string(), url.to_string()));
+        }
+        if fallback.is_none() && n.contains("x64") && n.ends_with("setup.exe") {
+            fallback = Some((n.to_string(), url.to_string()));
+        }
+    }
+    fallback
+}
+
+/// 检查 GitCode Releases 最新版本
 pub fn check_update() -> UpdateInfo {
     let current = env!("CARGO_PKG_VERSION").to_string();
 
-    // 方式一：releases/latest 重定向拿 tag（避开 API 限流，走 github.com）
-    let latest_page = format!("https://github.com/{}/releases/latest", UPDATE_REPO);
-    let no_redirect = crate::process::apply_proxy(
-        ureq::AgentBuilder::new()
-            .redirects(0)
-            .timeout(Duration::from_secs(10))
-            .user_agent("dsh-desktop-update-check/1.0"),
-    )
-    .build();
-    if let Ok(resp) = no_redirect.get(&latest_page).call() {
-        if let Some(loc) = resp.header("location") {
-            // 仓库还没有任何发布：/releases/latest -> /releases
-            if loc.trim_end_matches('/').ends_with("/releases") {
-                return UpdateInfo {
-                    current,
-                    ..Default::default()
-                };
-            }
-            let tag = loc.rsplit('/').next().unwrap_or("").trim().to_string();
-            if looks_like_version(&tag) {
-                let asset_name = asset_name_for(&tag);
-                let asset_url = format!(
-                    "https://github.com/{}/releases/download/{}/{}",
-                    UPDATE_REPO, tag, asset_name
-                );
-                // 验证安装包确实存在（HEAD）
-                let asset_exists = agent().head(&asset_url).call().is_ok();
-                return UpdateInfo {
-                    current: current.clone(),
-                    latest: Some(tag.clone()),
-                    has_update: has_update(&tag, &current),
-                    release_url: Some(format!(
-                        "https://github.com/{}/releases/tag/{}",
-                        UPDATE_REPO, tag
-                    )),
-                    asset_name: Some(asset_name),
-                    asset_url: if asset_exists { Some(asset_url) } else { None },
-                    error: None,
-                };
-            }
-        }
-    }
-
-    // 方式二：GitHub API（兜底）
-    let api = format!("https://api.github.com/repos/{}/releases/latest", UPDATE_REPO);
-    let resp = match agent().get(&api).call() {
+    let endpoint = format!("{}/releases/latest", api());
+    let resp = match agent().get(&endpoint).call() {
         Ok(r) => r,
         Err(ureq::Error::Status(404, _)) => {
-            // 还没有发布任何版本
+            // 仓库还没有发布任何版本
             return UpdateInfo {
                 current,
                 ..Default::default()
@@ -160,37 +162,22 @@ pub fn check_update() -> UpdateInfo {
         .get("tag_name")
         .and_then(|t| t.as_str())
         .map(|s| s.to_string());
-    info.release_url = json
-        .get("html_url")
-        .and_then(|u| u.as_str())
-        .map(|s| s.to_string());
-    if let Some(assets) = json.get("assets").and_then(|a| a.as_array()) {
-        for a in assets {
-            let n = a.get("name").and_then(|x| x.as_str()).unwrap_or("");
-            if n.contains("x64") && n.ends_with("setup.exe") {
-                info.asset_name = Some(n.to_string());
-                info.asset_url = a
-                    .get("browser_download_url")
-                    .and_then(|u| u.as_str())
-                    .map(|s| s.to_string());
-                break;
-            }
+    if let Some(tag) = &info.latest {
+        info.release_url = Some(release_url(tag));
+        if let Some((name, url)) = find_installer_asset(json.get("assets"), tag) {
+            info.asset_name = Some(name);
+            info.asset_url = Some(url);
         }
-    }
-    if let Some(latest) = &info.latest {
-        info.has_update = has_update(latest, &info.current);
+        info.has_update = has_update(tag, &info.current);
     }
     info
 }
 
-/// 拉取全部历史版本（GitHub API /releases），从新到旧返回可安装的版本。
+/// 拉取全部历史版本（GitCode API /releases），从新到旧返回可安装的版本。
 pub fn list_releases() -> Result<Vec<Release>, String> {
-    let api = format!(
-        "https://api.github.com/repos/{}/releases?per_page=50",
-        UPDATE_REPO
-    );
+    let endpoint = format!("{}/releases?per_page=50", api());
     let resp = agent()
-        .get(&api)
+        .get(&endpoint)
         .call()
         .map_err(|e| format!("无法连接更新服务器：{}", e))?;
     let body = resp
@@ -211,57 +198,29 @@ pub fn list_releases() -> Result<Vec<Release>, String> {
         if !looks_like_version(&tag) {
             continue;
         }
-        let release_url = rel
-            .get("html_url")
-            .and_then(|u| u.as_str())
-            .map(|s| s.to_string());
-        // 找到该版本的 setup.exe 资产（无安装包则无法回退，跳过）
-        let mut asset_name = None;
-        let mut asset_url = None;
-        if let Some(assets) = rel.get("assets").and_then(|a| a.as_array()) {
-            for a in assets {
-                let n = a.get("name").and_then(|x| x.as_str()).unwrap_or("");
-                if n.contains("x64") && n.ends_with("setup.exe") {
-                    asset_name = Some(n.to_string());
-                    asset_url = a
-                        .get("browser_download_url")
-                        .and_then(|u| u.as_str())
-                        .map(|s| s.to_string());
-                    break;
-                }
-            }
-        }
-        if asset_name.is_none() || asset_url.is_none() {
+        // 找到该版本对应的安装包附件（无安装包则无法更新/回退，跳过）
+        let Some((asset_name, asset_url)) = find_installer_asset(rel.get("assets"), &tag) else {
             continue;
-        }
+        };
+        let page = release_url(&tag);
         releases.push(Release {
             tag,
-            asset_name,
-            asset_url,
-            release_url,
+            asset_name: Some(asset_name),
+            asset_url: Some(asset_url),
+            release_url: Some(page),
         });
     }
-    // GitHub /releases 已按发布时间倒序，保持从新到旧
+    // GitCode 已按发布时间倒序，保持从新到旧
     Ok(releases)
 }
 
-/// 下载更新安装包（直连失败时依次回退：系统代理、国内加速镜像）
+/// 下载更新安装包：GitCode 为国内服务，浏览器直链（可能 302 到 OBS 存储），
+/// 无需像 GitHub 那样走海外加速镜像；直接下载失败即返回错误。
 pub fn download_update(app: &AppHandle, url: &str, name: &str) -> Result<String, String> {
     let dest = crate::state::dl_dir().join(name);
     if let Some(d) = dest.parent() {
         std::fs::create_dir_all(d).map_err(|e| e.to_string())?;
     }
-    let direct = crate::download::download(app, url, &dest, name, "update:download");
-    if direct.is_ok() {
-        return Ok(dest.display().to_string());
-    }
-    let mut last_err = direct.unwrap_err();
-    for prefix in ["https://ghfast.top/", "https://gh-proxy.com/"] {
-        let u = format!("{}{}", prefix, url);
-        match crate::download::download(app, &u, &dest, name, "update:download") {
-            Ok(()) => return Ok(dest.display().to_string()),
-            Err(e) => last_err = e,
-        }
-    }
-    Err(format!("下载安装包失败：{}", last_err))
+    crate::download::download(app, url, &dest, name, "update:download")?;
+    Ok(dest.display().to_string())
 }

@@ -1101,6 +1101,14 @@ window.__ModuleLoader__.load({
       }
 
       //#region tab chrome：标签页 × 关闭按钮 + 打开文件自动激活
+      /** 读取标签按钮上的文件名：跳过末尾追加的 ✕ span，避免 textContent 被污染后匹配失效。 */
+      function tabLabel(btn) {
+        const nodes = btn.childNodes;
+        for (const n of nodes) {
+          if (n.nodeType === 3 && n.nodeValue) return n.nodeValue.trim();
+        }
+        return (btn.textContent || "").replace(/\s*✕\s*$/, "").trim();
+      }
       /** 给每个已打开的文件标签打上 data-dfx-file 标记并补挂关闭按钮。 */
       function syncTabChrome() {
         if (typeof document === "undefined") return;
@@ -1108,8 +1116,8 @@ window.__ModuleLoader__.load({
         for (const p of fileEntryDisposers.keys()) byName.set(p.split("/").pop() || p, p);
         const buttons = document.querySelectorAll('button[role="tab"]');
         for (const btn of buttons) {
-          const name = (btn.textContent || "").trim();
-          if (!byName.has(name)) continue;
+          const name = tabLabel(btn);
+          if (!name || !byName.has(name)) continue;
           if (!btn.dataset.dfxFile) btn.dataset.dfxFile = "1";
           btn.__dfxPath = byName.get(name);
           btn.title = name; // 悬浮显示完整文件名（省略号场景）
@@ -1170,16 +1178,21 @@ window.__ModuleLoader__.load({
       if (tabObserver) tabObserver.observe(document.body, { childList: true, subtree: true });
       /** 打开文件后自动激活对应标签：标签环只渲染 label 文本且激活态由宿主会话 store 决定，
        *  插件无直接 API，等价做法是点击该标签按钮（其 onClick 即宿主 setView(id)）。
-       *  点击后校验 aria-selected，若宿主尚未提交 setView 则自动重试，避免激活被吞导致卡顿感。 */
-      function activateFileTab(name) {
-        if (typeof document === "undefined" || !name) return;
+       *  优先按精确路径匹配（syncTabChrome 已标 __dfxPath），否则回退按文件名匹配（tabLabel 剔除 ✕）。
+       *  点击后校验 aria-selected，若宿主尚未提交 setView 则自动重试，避免激活被吞。 */
+      function activateFileTab(path, name) {
+        if (typeof document === "undefined" || !path) return;
         let attempts = 0;
+        const findBtn = () => {
+          const byPath = Array.from(document.querySelectorAll('button[role="tab"]')).find((b) => b.__dfxPath === path);
+          if (byPath) return byPath;
+          if (!name) return null;
+          return Array.from(document.querySelectorAll('button[role="tab"]')).filter((b) => tabLabel(b) === name).pop(); // 同名取最后一个（新打开的排在后）
+        };
         const tryClick = () => {
           attempts += 1;
           if (attempts > 10) return;
-          const btn = Array.from(document.querySelectorAll('button[role="tab"]'))
-            .filter((b) => (b.textContent || "").trim() === name)
-            .pop(); // 同名取最后一个（新打开的排在后）
+          const btn = findBtn();
           if (!btn) {
             setTimeout(tryClick, 40); // 等标签环渲染完成
             return;
@@ -1187,7 +1200,7 @@ window.__ModuleLoader__.load({
           btn.click();
           setTimeout(() => {
             const selected = Array.from(document.querySelectorAll('button[role="tab"]'))
-              .some((b) => (b.textContent || "").trim() === name && b.getAttribute("aria-selected") === "true");
+              .some((b) => (b.__dfxPath === path || (name && tabLabel(b) === name)) && b.getAttribute("aria-selected") === "true");
             if (!selected) tryClick(); // 点击未生效则重试
           }, 80);
         };
@@ -1200,7 +1213,7 @@ window.__ModuleLoader__.load({
         if (!d.path) return;
         const sessionId = d.sessionId || currentSessionId(ctx) || "";
         registerFileView({ path: d.path, name: d.name, sessionId });
-        activateFileTab(d.name || d.path.split("/").pop() || d.path);
+        activateFileTab(d.path, d.name || d.path.split("/").pop() || d.path);
       };
       window.addEventListener("dshkit:openfile", onOpenFile);
 
