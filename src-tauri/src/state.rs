@@ -14,6 +14,21 @@ pub const DEFAULT_REGISTRY: &str = "https://registry.npmmirror.com";
 pub const BINARY_MIRROR: &str = "https://registry.npmmirror.com/-/binary";
 pub const OFFICIAL_NODE_DIST: &str = "https://nodejs.org/dist";
 
+/// 外部内置插件配置：用户指定的 GitHub 仓库 / npm 包，安装进 `plugins/` 后与
+/// 内置插件一样被默认启用。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExternalPluginCfg {
+    /// 目录名（安装到 plugins/ 下的目录名，添加时由 full_name 推导）
+    pub name: String,
+    /// "github" | "npm"
+    pub source: String,
+    /// github: "owner/repo"；npm: 包全名（如 @dsh-kit/plugin-foo）
+    pub full_name: String,
+    /// 仅 github 有：默认分支（用于拼 zipball 下载地址）
+    #[serde(default)]
+    pub default_branch: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -23,6 +38,9 @@ pub struct Settings {
     pub stop_on_exit: bool,
     pub node_version: String,
     pub auto_install_node: bool,
+    pub plugins_initialized: bool,
+    pub skillshub_url: String,
+    pub external_plugins: Vec<ExternalPluginCfg>,
 }
 
 impl Default for Settings {
@@ -34,6 +52,9 @@ impl Default for Settings {
             stop_on_exit: true,
             node_version: NODE_VERSION.into(),
             auto_install_node: true,
+            plugins_initialized: false,
+            skillshub_url: DEFAULT_SKILLSHUB_URL.into(),
+            external_plugins: Vec::new(),
         }
     }
 }
@@ -71,6 +92,53 @@ pub fn dl_dir() -> PathBuf {
     data_dir().join("downloads")
 }
 
+/// dsh 用户目录（DSH_HOME），默认 ~/.dsh
+pub fn dsh_home() -> PathBuf {
+    if let Ok(h) = std::env::var("DSH_HOME") {
+        if !h.trim().is_empty() {
+            return PathBuf::from(h);
+        }
+    }
+    if let Some(home) = std::env::var_os("USERPROFILE") {
+        PathBuf::from(home).join(".dsh")
+    } else if let Some(home) = std::env::var_os("HOME") {
+        PathBuf::from(home).join(".dsh")
+    } else {
+        PathBuf::from(".dsh")
+    }
+}
+
+/// dsh profile 目录（dsh --profile web），内置插件挂载在这里
+pub fn dsh_profile_dir() -> PathBuf {
+    dsh_home().join("profiles").join("web")
+}
+
+/// profile 的 package.json（dependencies + dsh.profile.bundles）
+pub fn dsh_profile_manifest() -> PathBuf {
+    dsh_profile_dir().join("package.json")
+}
+
+/// profile 的 node_modules/@dsh-kit 链接根目录
+pub fn dsh_profile_kit_link_dir() -> PathBuf {
+    dsh_profile_dir().join("node_modules").join("@dsh-kit")
+}
+
+/// 项目内置插件目录（打包后可改用 resources 目录）
+pub fn builtin_plugins_dir() -> PathBuf {
+    let exe = std::env::current_exe().ok();
+    // 开发模式：从工作目录找 plugins/（仓库根即 cargo 运行目录，至少向上找两层）
+    if let Ok(cwd) = std::env::current_dir() {
+        for cand in [cwd.clone(), cwd.join(".."), cwd.join("..").join("..")] {
+            let p = cand.join("plugins");
+            if p.is_dir() {
+                return p;
+            }
+        }
+    }
+    let _ = exe;
+    PathBuf::from("plugins")
+}
+
 /// 部署成功标记（写入 dsh.installed 与 dsh.version）
 pub fn dsh_marker() -> PathBuf {
     data_dir().join("dsh.installed")
@@ -81,14 +149,28 @@ pub fn dsh_version_file() -> PathBuf {
 
 // ---------- 设置读写 ----------
 
+/// 技能广场默认数据源：skillhub.cn 官方 API（按热度取前 100）。
+pub const DEFAULT_SKILLSHUB_URL: &str = "https://api.skillhub.cn/api/skills?sortBy=score&pageSize=100";
+/// 已失效的旧版 skillshub 索引地址（GitHub 直连不可用），加载设置时自动迁移。
+const LEGACY_SKILLSHUB_URL: &str = "https://raw.githubusercontent.com/AlwaysSum/skillshub/main/index.json";
+
 pub fn load_settings() -> Settings {
     let p = settings_path();
-    if let Ok(s) = std::fs::read_to_string(&p) {
-        if let Ok(s) = serde_json::from_str::<Settings>(&s) {
-            return s;
+    let mut s = if let Ok(text) = std::fs::read_to_string(&p) {
+        if let Ok(parsed) = serde_json::from_str::<Settings>(&text) {
+            parsed
+        } else {
+            Settings::default()
         }
+    } else {
+        Settings::default()
+    };
+    // 旧 skillshub 地址已失效：自动迁移到 skillhub.cn 数据源并回写
+    if s.skillshub_url == LEGACY_SKILLSHUB_URL {
+        s.skillshub_url = DEFAULT_SKILLSHUB_URL.into();
+        let _ = save_settings(&s);
     }
-    Settings::default()
+    s
 }
 
 pub fn save_settings(s: &Settings) -> Result<(), String> {

@@ -9,3 +9,6 @@ src-tauri/gen/
 # misc
 *.log
 .DS_Store
+
+# local pnpm store
+.pnpm-store/

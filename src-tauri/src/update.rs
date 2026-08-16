@@ -17,6 +17,15 @@ pub struct UpdateInfo {
     pub error: Option<String>,
 }
 
+/// 某个版本（发布记录），供前端列出历史版本以更新/回退
+#[derive(Serialize, Clone)]
+pub struct Release {
+    pub tag: String,
+    pub asset_name: Option<String>,
+    pub asset_url: Option<String>,
+    pub release_url: Option<String>,
+}
+
 /// "v0.1.0" / "0.1.0" -> (0,1,0)
 pub fn version_tuple(v: &str) -> (u32, u32, u32) {
     let t = v.trim().trim_start_matches('v');
@@ -172,6 +181,68 @@ pub fn check_update() -> UpdateInfo {
         info.has_update = has_update(latest, &info.current);
     }
     info
+}
+
+/// 拉取全部历史版本（GitHub API /releases），从新到旧返回可安装的版本。
+pub fn list_releases() -> Result<Vec<Release>, String> {
+    let api = format!(
+        "https://api.github.com/repos/{}/releases?per_page=50",
+        UPDATE_REPO
+    );
+    let resp = agent()
+        .get(&api)
+        .call()
+        .map_err(|e| format!("无法连接更新服务器：{}", e))?;
+    let body = resp
+        .into_string()
+        .map_err(|e| format!("读取更新数据失败：{}", e))?;
+    let arr: serde_json::Value = serde_json::from_str(&body)
+        .map_err(|_| "更新服务器返回异常数据".to_string())?;
+    let arr = arr.as_array().ok_or("更新服务器返回异常数据")?;
+
+    let mut releases: Vec<Release> = Vec::new();
+    for rel in arr {
+        let tag = rel
+            .get("tag_name")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if !looks_like_version(&tag) {
+            continue;
+        }
+        let release_url = rel
+            .get("html_url")
+            .and_then(|u| u.as_str())
+            .map(|s| s.to_string());
+        // 找到该版本的 setup.exe 资产（无安装包则无法回退，跳过）
+        let mut asset_name = None;
+        let mut asset_url = None;
+        if let Some(assets) = rel.get("assets").and_then(|a| a.as_array()) {
+            for a in assets {
+                let n = a.get("name").and_then(|x| x.as_str()).unwrap_or("");
+                if n.contains("x64") && n.ends_with("setup.exe") {
+                    asset_name = Some(n.to_string());
+                    asset_url = a
+                        .get("browser_download_url")
+                        .and_then(|u| u.as_str())
+                        .map(|s| s.to_string());
+                    break;
+                }
+            }
+        }
+        if asset_name.is_none() || asset_url.is_none() {
+            continue;
+        }
+        releases.push(Release {
+            tag,
+            asset_name,
+            asset_url,
+            release_url,
+        });
+    }
+    // GitHub /releases 已按发布时间倒序，保持从新到旧
+    Ok(releases)
 }
 
 /// 下载更新安装包（直连失败时依次回退：系统代理、国内加速镜像）

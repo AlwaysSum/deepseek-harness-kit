@@ -1,0 +1,6 @@
+# @dsh-kit/plugin-i18n-zh bundle patch: one row mounting the 汉化 UI plugin.
+# Client-only (browser half); the row exists so the package appears in the
+# Loader and its `dsh.client` roster entry is scanned into the browser boot set.
+- insert:
+    - id: plugin-i18n-zh
+      name: '@dsh-kit/plugin-i18n-zh'

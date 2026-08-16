@@ -1,8 +1,26 @@
 # DeepSeek Harness 桌面端（dsh-desktop）
 
 一个基于 **Tauri 2** 的 Windows 桌面应用：一键部署并运行
-[DeepSeek Harness](https://gitcode.com/gh_mirrors/de/deepseek-harness)（gitcode 镜像仓库），
+[DeepSeek Harness](https://gitcode.com/gh_mirrors/de/deepseek-harness)（GitCode 镜像仓库），
 免去手动装环境、克隆、安装依赖、构建的繁琐步骤。
+
+[![GitHub Stars](https://img.shields.io/github/stars/AlwaysSum/deepseek-harness-kit)](https://github.com/AlwaysSum/deepseek-harness-kit)
+[![GitHub Forks](https://img.shields.io/github/forks/AlwaysSum/deepseek-harness-kit)](https://github.com/AlwaysSum/deepseek-harness-kit)
+[![GitHub Release](https://img.shields.io/github/v/release/AlwaysSum/deepseek-harness-kit)](https://github.com/AlwaysSum/deepseek-harness-kit/releases)
+[![GitHub Downloads](https://img.shields.io/github/downloads/AlwaysSum/deepseek-harness-kit/total)](https://github.com/AlwaysSum/deepseek-harness-kit/releases)
+[![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows&logoColor=white)](https://github.com/AlwaysSum/deepseek-harness-kit/releases)
+[![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
+[![Rust](https://img.shields.io/badge/Rust-2021-orange?logo=rust&logoColor=white)](https://www.rust-lang.org)
+[![Vite](https://img.shields.io/badge/Vite-6-646CFF?logo=vite&logoColor=white)](https://vitejs.dev)
+
+## Star 增长趋势
+
+仓库收藏（Star）增长曲线，数据实时更新：
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=AlwaysSum/deepseek-harness-kit&type=Date&theme=dark" />
+  <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=AlwaysSum/deepseek-harness-kit&type=Date&theme=light" width="720" />
+</picture>
 
 ## 功能
 
@@ -92,3 +110,19 @@ npm run tauri build  # 打包（NSIS 安装包输出到 src-tauri/target/release
   `nsis-3.11.zip` 与 `nsis_tauri_utils.dll` 放入 `%LOCALAPPDATA%\tauri\NSIS\`（SHA1 校验，
   需保持官方文件一致），打包器检测到文件齐全后会自动跳过下载。
 - 仓库依赖全部来自 npm registry（无 GitHub 依赖），部署时使用 npmmirror 镜像即可。
+
+## 技术栈
+
+| 层 | 技术 |
+| --- | --- |
+| 桌面框架 | [Tauri 2](https://tauri.app)（Rust + WebView2） |
+| 前端 | 原生 JS + [Vite 6](https://vitejs.dev) |
+| 后端 | Rust：`ureq` 下载（支持系统代理）、`zip` 解压、进程树管理 |
+| 运行时 | 官方 `@deepseek-ai/dsh` npm 包（`npx` 直接调用，无需源码构建） |
+| 打包 | NSIS 安装包（`currentUser`，无需管理员权限） |
+
+## 相关链接
+
+- 上游项目：DeepSeek Harness — [GitHub](https://github.com/deepseek-ai/deepseek-harness) / [GitCode 镜像](https://gitcode.com/gh_mirrors/de/deepseek-harness)
+- 本仓库发布页：GitHub [Releases](https://github.com/AlwaysSum/deepseek-harness-kit/releases) / GitCode [Releases](https://gitcode.com/Sunflower816/deepseek-harness-kit/releases)
+- Star 趋势图：[star-history.com](https://star-history.com/#AlwaysSum/deepseek-harness-kit&Date)

@@ -184,13 +184,7 @@ async function buildTree(ctx, root, relDir, depth) {
       const sub = await buildTree(ctx, root, childRel, depth + 1);
       children.push({ name: e.name, type: "dir", path: childRel, children: sub.children || [] });
     } else {
-      let size = e.size;
-      if (size === undefined) {
-        try {
-          size = (await fsStat(safeResolve(root, childRel))).size;
-        } catch {}
-      }
-      children.push({ name: e.name, type: e.type === "file" ? "file" : "other", path: childRel, size });
+      children.push({ name: e.name, type: e.type === "file" ? "file" : "other", path: childRel, size: e.size });
     }
   }
   return { name: relDir.split(sep).pop() || "/", type: "dir", path: relDir, children };

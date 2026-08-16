@@ -68,23 +68,6 @@ window.__ModuleLoader__.load({
       ".dfx-mediaPreview{flex:1;min-height:0;overflow:auto;display:flex;align-items:center;justify-content:center;padding:16px}",
       ".dfx-mediaPreview video{max-width:100%;max-height:100%;object-fit:contain;border-radius:8px;background:#000}",
       ".dfx-docBar{flex:none;display:flex;align-items:center;gap:10px;padding:14px 2px}",
-      ".dfx-cmHost{flex:1;min-height:0;overflow:hidden}",
-      ".dfx-cmHost .CodeMirror{height:100%;font-family:Consolas,monospace;font-size:12.5px;line-height:20px;background:var(--dsw-alias-bg-layer-1,#15181f);color:var(--dsw-alias-label-primary,#eceff4)}",
-      ".dfx-cmHost .CodeMirror-gutters{background:var(--dsw-alias-bg-layer-1,#15181f);border-right:1px solid var(--dsw-alias-border-l2,#343b48)}",
-      ".dfx-cmHost .CodeMirror-linenumber{color:var(--dsw-alias-label-tertiary,#7d8592)}",
-      ".dfx-cmHost .CodeMirror-cursor{border-left:1px solid var(--dsw-alias-label-primary,#eceff4)}",
-      ".dfx-cmHost .CodeMirror-selected,.dfx-cmHost .CodeMirror-focused .CodeMirror-selected{background:rgba(76,141,255,.25)}",
-      ".dfx-cmHost .CodeMirror-activeline-background{background:rgba(255,255,255,.04)}",
-      ".dfx-cmHost .CodeMirror-matchingbracket{color:inherit !important;outline:1px solid var(--dsw-alias-border-l2,#343b48)}",
-      ".dfx-cmHost .cm-s-default .cm-keyword{color:#c586c0}",
-      ".dfx-cmHost .cm-s-default .cm-string,.dfx-cmHost .cm-s-default .cm-string-2{color:#ce9178}",
-      ".dfx-cmHost .cm-s-default .cm-number,.dfx-cmHost .cm-s-default .cm-atom{color:#b5cea8}",
-      ".dfx-cmHost .cm-s-default .cm-comment{color:#6a9955;font-style:italic}",
-      ".dfx-cmHost .cm-s-default .cm-def,.dfx-cmHost .cm-s-default .cm-attribute,.dfx-cmHost .cm-s-default .cm-property{color:#9cdcfe}",
-      ".dfx-cmHost .cm-s-default .cm-variable,.dfx-cmHost .cm-s-default .cm-variable-2,.dfx-cmHost .cm-s-default .cm-variable-3{color:#dcdcaa}",
-      ".dfx-cmHost .cm-s-default .cm-operator,.dfx-cmHost .cm-s-default .cm-punctuation{color:#d4d4d4}",
-      ".dfx-cmHost .cm-s-default .cm-tag{color:#569cd6}",
-      ".dfx-cmHost .cm-s-default .cm-builtin{color:#4ec9b0}",
       // json / markdown / html viewers
       ".dfx-jsonBar{flex:none;display:flex;align-items:center;gap:8px;padding:0 2px 6px;flex-wrap:wrap}",
       ".dfx-jsonOk{color:var(--dsw-alias-label-tertiary,#7d8592);font-size:11px;line-height:16px}",
@@ -451,70 +434,6 @@ window.__ModuleLoader__.load({
     //#endregion
 
     //#region file editor (rendered as a conversation.view tab)
-    // CodeMirror 5 CDN 按需加载（离线/失败自动回退纯 textarea）。单文件 UMD，无打包依赖。
-    const CM_CDN = "https://cdn.jsdelivr.net/npm/codemirror@5.65.16/";
-    const CM_MODE_FILES = {
-      javascript: "mode/javascript/javascript.min.js",
-      clike: "mode/clike/clike.min.js",
-      python: "mode/python/python.min.js",
-      ruby: "mode/ruby/ruby.min.js",
-      go: "mode/go/go.min.js",
-      rust: "mode/rust/rust.min.js",
-      markdown: "mode/markdown/markdown.min.js",
-      yaml: "mode/yaml/yaml.min.js",
-      toml: "mode/toml/toml.min.js",
-      xml: "mode/xml/xml.min.js",
-      css: "mode/css/css.min.js",
-      sql: "mode/sql/sql.min.js",
-      shell: "mode/shell/shell.min.js",
-    };
-    const EXT_TO_MODE = {
-      js: "javascript", jsx: "javascript", mjs: "javascript", cjs: "javascript",
-      ts: "javascript", tsx: "javascript", json: "javascript",
-      py: "python", rb: "ruby", go: "go", rs: "rust",
-      java: "clike", c: "clike", h: "clike", cpp: "clike", hpp: "clike", cs: "clike",
-      md: "markdown", yml: "yaml", yaml: "yaml", toml: "toml",
-      html: "xml", xml: "xml", svg: "xml", css: "css", scss: "css", less: "css",
-      sql: "sql", sh: "shell", bash: "shell",
-    };
-    let cm5Promise = null;
-    function loadCodeMirror5() {
-      if (cm5Promise) return cm5Promise;
-      cm5Promise = new Promise((resolve, reject) => {
-        if (typeof window === "undefined" || !window.document) return reject(new Error("no dom"));
-        const timer = setTimeout(() => reject(new Error("CodeMirror 加载超时")), 8000);
-        const link = document.createElement("link");
-        link.rel = "stylesheet";
-        link.href = CM_CDN + "lib/codemirror.min.css";
-        document.head.appendChild(link);
-        const s = document.createElement("script");
-        s.src = CM_CDN + "lib/codemirror.min.js";
-        s.onload = () => {
-          clearTimeout(timer);
-          resolve(window.CodeMirror);
-        };
-        s.onerror = () => {
-          clearTimeout(timer);
-          reject(new Error("CodeMirror 加载失败"));
-        };
-        document.head.appendChild(s);
-      });
-      return cm5Promise;
-    }
-    function loadModeScript(src) {
-      return new Promise((resolve, reject) => {
-        const s = document.createElement("script");
-        s.src = CM_CDN + src;
-        s.onload = resolve;
-        s.onerror = () => reject(new Error("mode load failed: " + src));
-        document.head.appendChild(s);
-      });
-    }
-    function modeForPath(path) {
-      const ext = String(path).toLowerCase().split(".").pop() || "";
-      return EXT_TO_MODE[ext] || null;
-    }
-
     // 图片 / 视频 / 文档扩展名（与 host 路由对齐）。
     const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "bmp", "ico"]);
     const VIDEO_EXTS = new Set(["mp4", "m4v", "webm", "ogv", "ogg", "mov"]);
@@ -713,10 +632,8 @@ window.__ModuleLoader__.load({
       const [dirty, setDirty] = useState(false);
       const [loadErr, setLoadErr] = useState("");
       const [mediaErr, setMediaErr] = useState("");
-      const [useCM, setUseCM] = useState(false);
       const gutterRef = useRef(null);
       const areaRef = useRef(null);
-      const cmHostRef = useRef(null);
       const contentRef = useRef(content);
       contentRef.current = content;
       const dirtyRef = useRef(dirty);
@@ -725,28 +642,25 @@ window.__ModuleLoader__.load({
       const mediaUrl = `/dshkit-fs/media?session=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(filePath)}`;
 
       useEffect(() => {
-        let cancelled = false;
         setStatus("");
         setLoaded(false);
         setLoadErr("");
         setMediaErr("");
-        setUseCM(false);
         // 图片 / 视频走 /media 流式 webview，doc 走系统默认应用，均无需 fetch 文本内容。
         if (ekind === "image" || ekind === "video" || ekind === "doc") {
-          return () => {
-            cancelled = true;
-          };
+          return;
         }
+        const controller = new AbortController();
         setStatus("加载中…");
-        fetch(`/dshkit-fs/read?session=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(filePath)}`)
+        fetch(`/dshkit-fs/read?session=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(filePath)}`, {
+          signal: controller.signal,
+        })
           .then((r) => r.json())
           .then((d) => {
-            if (cancelled) return;
             if (!d.ok) {
               if (d.error === "binary") setLoadErr("二进制文件，不支持编辑");
               else if (d.error === "too large") setLoadErr("文件过大，拒绝读取");
               else setLoadErr("读取失败：" + d.error);
-              setLoaded(false);
               return;
             }
             setContent(d.content ?? "");
@@ -755,15 +669,12 @@ window.__ModuleLoader__.load({
             setLoaded(true);
           })
           .catch((e) => {
-            if (!cancelled) {
-              setLoadErr("读取失败：" + e.message);
-              setContent("");
-            }
+            if (e && e.name === "AbortError") return;
+            setLoadErr("读取失败：" + (e && e.message ? e.message : String(e)));
+            setContent("");
           });
-        return () => {
-          cancelled = true;
-        };
-      }, [filePath, sessionId, ekind]);
+        return () => controller.abort();
+      }, [filePath, sessionId]); // ekind 由 filePath 派生，无需单独列入依赖
 
       const save = () => {
         if (ekind === "json") {
@@ -801,17 +712,15 @@ window.__ModuleLoader__.load({
         }
       };
 
-      const jsonCheck =
-        ekind === "json"
-          ? (() => {
-              try {
-                JSON.parse(content);
-                return { ok: true };
-              } catch (e) {
-                return { ok: false, msg: e.message };
-              }
-            })()
-          : null;
+      const jsonCheck = useMemo(() => {
+        if (ekind !== "json") return null;
+        try {
+          JSON.parse(content);
+          return { ok: true };
+        } catch (e) {
+          return { ok: false, msg: e.message };
+        }
+      }, [ekind, content]);
 
       const onContentChange = (e) => {
         setContent(e.currentTarget.value);
@@ -838,56 +747,6 @@ window.__ModuleLoader__.load({
           setStatus("打开失败：" + e.message);
         }
       };
-
-      // CodeMirror 初始化（可选高亮，失败回退纯 textarea；json 复用 javascript 高亮）。
-      useEffect(() => {
-        if ((ekind !== "text" && ekind !== "json") || !loaded || useCM) return;
-        let cancelled = false;
-        let cm = null;
-        const mode = modeForPath(filePath);
-        (async () => {
-          try {
-            const CM = await loadCodeMirror5();
-            if (mode) {
-              const modeFile = CM_MODE_FILES[mode];
-              if (modeFile) await loadModeScript(modeFile);
-            }
-            if (cancelled || !cmHostRef.current) return;
-            cm = CM(cmHostRef.current, {
-              value: content,
-              lineNumbers: true,
-              mode: mode || "text/plain",
-              tabSize: 4,
-              indentUnit: 4,
-              indentWithTabs: false,
-              lineWrapping: false,
-              extraKeys: {
-                "Ctrl-S": () => save(),
-                "Cmd-S": () => save(),
-                "Ctrl-W": () => requestClose(),
-                "Cmd-W": () => requestClose(),
-              },
-            });
-            cm.on("change", () => {
-              const next = cm.getValue();
-              setContent(next);
-              setDirty(true);
-              setStatus("");
-            });
-            setUseCM(true);
-          } catch {
-            /* 回退 textarea */
-          }
-        })();
-        return () => {
-          cancelled = true;
-          if (cm) {
-            try {
-              cm.toTextArea();
-            } catch {}
-          }
-        };
-      }, [ekind, loaded, filePath]); // eslint-disable-line react-hooks/exhaustive-deps
 
       const onKeyDown = (e) => {
         if (e.key === "Tab") {
@@ -1040,23 +899,21 @@ window.__ModuleLoader__.load({
                 ],
               })
             : null,
-          useCM
-            ? jsx("div", { className: "dfx-cmHost", ref: cmHostRef })
-            : jsx("div", {
-                className: "dfx-editorWrap",
-                children: [
-                  jsx("div", { className: "dfx-gutter", ref: gutterRef, children: gutterNumbers }),
-                  jsx("textarea", {
-                    ref: areaRef,
-                    value: content,
-                    onChange: onContentChange,
-                    onKeyDown,
-                    onScroll: onScrollSync,
-                    spellCheck: false,
-                    placeholder: loaded ? "" : "加载中…",
-                  }),
-                ],
+          jsx("div", {
+            className: "dfx-editorWrap",
+            children: [
+              jsx("div", { className: "dfx-gutter", ref: gutterRef, children: gutterNumbers }),
+              jsx("textarea", {
+                ref: areaRef,
+                value: content,
+                onChange: onContentChange,
+                onKeyDown,
+                onScroll: onScrollSync,
+                spellCheck: false,
+                placeholder: loaded ? "" : "加载中…",
               }),
+            ],
+          }),
         ],
       });
     }

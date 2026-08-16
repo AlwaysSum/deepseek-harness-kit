@@ -36,6 +36,22 @@
             </svg>
             <span>DeepSeek<br />Harness</span>
           </button>
+          <div class="nav-sep"></div>
+          <button id="nav-market" class="nav-item" title="插件市场">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M20 12a8 8 0 1 1-16 0 8 8 0 0 1 16 0Z" />
+              <path d="M12 4v3 M12 17v3 M4 12h3 M17 12h3" />
+              <path d="M12 8.5l1 2.5 2.5 1-2.5 1-1 2.5-1-2.5-2.5-1 2.5-1z" />
+            </svg>
+            <span>插件市场</span>
+          </button>
+          <button id="nav-skills" class="nav-item" title="技能广场">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 3l2.2 5.6L20 10.8l-5.8 2.2L12 18.6l-2.2-5.6L4 10.8l5.8-2.2z" />
+              <path d="M19 17l.8 2.2L22 20l-2.2.8L19 23l-.8-2.2L16 20l2.2-.8z" />
+            </svg>
+            <span>技能广场</span>
+          </button>
         </nav>
         <div class="sidebar-bottom">
           <button id="btn-sidebar-settings" class="side-btn" title="设置">
@@ -101,13 +117,14 @@
 
         <!-- 视图二：DeepSeek Harness 页面（iframe 内嵌） -->
         <section id="view-page" class="view">
-          <div class="page-toolbar">
-            <span class="page-status-dot" id="page-dot"></span>
-            <span class="page-url" id="page-url">http://127.0.0.1:3080</span>
-            <span class="toolbar-spacer"></span>
-            <button id="btn-refresh" class="btn-mini">刷新</button>
-            <button id="btn-open-browser" class="btn-mini">在浏览器打开</button>
-            <button id="btn-back" class="btn-mini">返回控制台</button>
+          <!-- 可拖动悬浮操作按钮：点击展开 刷新 / 在浏览器打开 / 返回控制台 -->
+          <div id="float-fab" class="fab" title="操作">
+            <button id="fab-toggle" type="button" class="fab-btn" aria-haspopup="menu" aria-expanded="false">⋯</button>
+            <div id="fab-menu" class="fab-menu" hidden>
+              <button type="button" data-action="refresh">刷新</button>
+              <button type="button" data-action="open-browser">在浏览器打开</button>
+              <button type="button" data-action="back">返回控制台</button>
+            </div>
           </div>
           <div class="page-wrap">
             <iframe id="harness-frame" title="DeepSeek Harness"></iframe>
@@ -151,9 +168,144 @@
             <span>数据目录</span>
             <input id="set-data-dir" type="text" readonly />
           </label>
+          <label class="field">
+            <span>技能广场地址（技能 / 专家广场数据源，支持 skillhub.cn API 与旧版 skillshub index.json）</span>
+            <input id="set-skillshub-url" type="text" spellcheck="false" placeholder="https://api.skillhub.cn/api/skills?sortBy=score&amp;pageSize=100" />
+          </label>
         </div>
         <div class="modal-foot">
           <button id="btn-save-settings" class="btn-primary">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 插件市场弹窗 -->
+    <div id="modal-market" class="modal" hidden>
+      <div class="modal-box modal-lg modal-market-box">
+        <div class="modal-head">
+          <h2>插件市场</h2>
+          <button id="btn-close-market" class="icon-btn">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="market-tabs" id="market-tabs">
+            <button type="button" class="market-tab" data-tab="market" data-active="1">插件市场</button>
+            <button type="button" class="market-tab" data-tab="local">本地插件</button>
+          </div>
+
+          <!-- 插件市场：在线搜索 / 安装新插件（GitHub -> npm 兜底） -->
+          <div class="market-panel" id="panel-market" data-active="1">
+            <div class="market-hero">
+              <div class="market-hero-title">搜索并安装社区插件</div>
+              <p class="market-hero-desc">
+                输入关键词搜索 dsh 相关插件，优先从 GitHub 仓库查找，GitHub 不可用时自动回退到 npm registry。
+                安装后会解压到项目 <code>plugins/</code> 目录，随后可在「本地插件」中启用（重启 dsh 服务后生效）。
+              </p>
+            </div>
+            <div class="search-bar">
+              <input id="plugin-search-input" type="text" spellcheck="false" placeholder="搜索插件，如 i18n、theme、file-explorer…" />
+              <button id="plugin-search-btn" type="button" class="btn-primary">搜索</button>
+            </div>
+            <div class="market-section-head" id="plugin-search-status">输入关键词后点击「搜索」</div>
+            <div id="market-online-list" class="market-online-list">
+              <div class="market-card-empty">尚未搜索</div>
+            </div>
+          </div>
+
+          <!-- 本地插件：列出/启停已安装（含内置）插件 -->
+          <div class="market-panel" id="panel-local">
+            <div class="market-import">
+              <span class="market-import-label">本地导入插件：</span>
+              <button id="plugin-import-zip" type="button" class="btn-secondary">导入 zip</button>
+              <button id="plugin-import-dir" type="button" class="btn-secondary">导入文件夹</button>
+              <input id="plugin-zip-input" type="file" accept=".zip" hidden />
+              <input id="plugin-dir-input" type="file" webkitdirectory hidden />
+            </div>
+
+            <div class="market-section-head">内置插件（启停后重启 dsh 服务生效）</div>
+            <div id="market-list" class="plugin-list">
+              <div class="plugin-row dim">读取中…</div>
+            </div>
+
+            <div class="market-section-head">外部内置插件（配置 GitHub / npm 插件，安装后默认与内置插件一起启用）</div>
+            <div id="external-plugin-list" class="plugin-list">
+              <div class="plugin-row dim">读取中…</div>
+            </div>
+            <div class="external-add">
+              <select id="ext-source" class="ext-source">
+                <option value="github">GitHub</option>
+                <option value="npm">npm</option>
+              </select>
+              <input id="ext-full-name" type="text" spellcheck="false" placeholder="owner/repo 或 npm 包名，如 @dsh-kit/plugin-i18n-zh" />
+              <button id="ext-add-btn" type="button" class="btn-secondary">添加</button>
+            </div>
+            <div class="market-hint">
+              首次启动时，已配置的外部内置插件会与内置插件一起自动安装并默认启用；也可在下方对单个插件手动「安装并启用」。
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button id="btn-market-refresh" class="btn-secondary">刷新</button>
+          <button id="btn-close-market-2" class="btn-primary">关闭</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 技能广场弹窗 -->
+    <div id="modal-skills" class="modal" hidden>
+      <div class="modal-box modal-lg modal-skills-box">
+        <div class="modal-head">
+          <h2>技能广场</h2>
+          <button id="btn-close-skills" class="icon-btn">✕</button>
+        </div>
+        <div class="modal-body">
+          <div class="skills-tabs" id="skills-tabs">
+            <button type="button" class="skills-tab" data-tab="my" data-active="1">我的技能</button>
+            <button type="button" class="skills-tab" data-tab="plaza-skills">技能广场</button>
+            <button type="button" class="skills-tab" data-tab="plaza-experts">专家广场</button>
+          </div>
+
+          <!-- 我的技能：本地可用 skills + 专家 -->
+          <div class="skills-panel" id="panel-my" data-active="1">
+            <div class="skills-import">
+              <span class="skills-import-label">本地导入技能：</span>
+              <button id="skills-import-zip" type="button" class="btn-secondary">导入 zip</button>
+              <button id="skills-import-dir" type="button" class="btn-secondary">导入文件夹</button>
+              <input id="skills-zip-input" type="file" accept=".zip" hidden />
+              <input id="skills-dir-input" type="file" webkitdirectory hidden />
+            </div>
+            <div class="skills-section-head">我的技能</div>
+            <div id="my-skills" class="skills-list">
+              <div class="skill-row dim">加载中…</div>
+            </div>
+            <div class="skills-section-head">我的专家</div>
+            <div id="my-experts" class="skills-list">
+              <div class="skill-row dim">加载中…</div>
+            </div>
+          </div>
+
+          <!-- 技能广场：从数据源（skillhub.cn 等）拉取可安装技能 -->
+          <div class="skills-panel" id="panel-plaza-skills">
+            <div class="search-bar skills-search">
+              <input id="skills-search-input" type="text" spellcheck="false" placeholder="搜索技能，如 pdf、文档、图片…" />
+              <button id="skills-search-btn" type="button" class="btn-primary">搜索</button>
+            </div>
+            <div class="skills-section-head">技能广场（点击安装到我的技能）</div>
+            <div id="plaza-skills" class="skills-list">
+              <div class="skill-row dim">加载中…</div>
+            </div>
+          </div>
+
+          <!-- 专家广场：从数据源（skillhub.cn 等）拉取可安装专家 -->
+          <div class="skills-panel" id="panel-plaza-experts">
+            <div class="skills-section-head">专家广场（点击安装）</div>
+            <div id="plaza-experts" class="skills-list">
+              <div class="skill-row dim">加载中…</div>
+            </div>
+          </div>
+        </div>
+        <div class="modal-foot">
+          <button id="btn-skills-refresh" class="btn-secondary">刷新</button>
+          <button id="btn-close-skills-2" class="btn-primary">关闭</button>
         </div>
       </div>
     </div>
@@ -167,6 +319,10 @@
         </div>
         <div class="modal-body">
           <p id="update-text" class="update-text">正在检查更新…</p>
+          <div id="release-list" class="release-list" hidden>
+            <div class="release-list-head">历史版本（可更新或回退）</div>
+            <div id="release-items" class="release-items"></div>
+          </div>
           <div class="update-progress" id="update-progress" hidden>
             <pre id="update-log" class="update-log"></pre>
           </div>

@@ -1,8 +1,11 @@
 mod commands;
 mod deploy;
 mod download;
+mod hub;
+mod plugins;
 mod process;
 mod service;
+mod skills;
 mod state;
 mod update;
 
@@ -29,8 +32,28 @@ pub fn run() {
             commands::get_settings,
             commands::set_settings,
             commands::check_update,
+            commands::list_releases,
             commands::download_update,
             commands::open_file,
+            plugins::list_builtin_plugins,
+            plugins::set_builtin_plugin_enabled,
+            plugins::ensure_builtin_plugins_default_enabled,
+            plugins::list_external_plugins,
+            plugins::add_external_plugin,
+            plugins::remove_external_plugin,
+            plugins::install_external_plugin,
+            plugins::import_plugin_zip,
+            plugins::import_plugin_dir,
+            hub::search_remote_plugins,
+            hub::install_remote_plugin,
+            skills::list_my_skills,
+            skills::list_skill_plaza,
+            skills::install_skill,
+            skills::install_expert,
+            skills::remove_skill,
+            skills::remove_expert,
+            skills::import_skill_zip,
+            skills::import_skill_dir,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application");

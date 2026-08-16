@@ -42,7 +42,17 @@ pub struct Status {
 }
 
 #[tauri::command]
-pub fn get_status(state: State<AppState>) -> Status {
+pub async fn get_status(state: State<'_, AppState>) -> Result<Status, String> {
+    let st = state.inner().clone();
+    let s = tauri::async_runtime::spawn_blocking(move || build_status(&st))
+        .await
+        .map_err(|e| format!("状态线程异常: {}", e))?;
+    Ok(s)
+}
+
+/// 注意：所有进程 spawn / HTTP 探测 / netstat 都是阻塞 I/O，
+/// 必须在 spawn_blocking 线程执行，否则会卡住 Tauri 主线程导致 UI 无响应。
+fn build_status(state: &AppState) -> Status {
     let settings = state.settings.lock().unwrap().clone();
     let port = settings.port;
 
@@ -171,22 +181,26 @@ pub async fn stop_service(
 }
 
 #[tauri::command]
-pub fn open_browser(url: String) -> Result<(), String> {
-    #[cfg(windows)]
-    {
-        let mut cmd = std::process::Command::new("cmd");
-        cmd.args(["/C", "start", "", &url]);
-        no_window(&mut cmd);
-        cmd.status().map_err(|e| format!("打开浏览器失败: {}", e))?;
-        Ok(())
-    }
-    #[cfg(not(windows))]
-    {
-        let mut cmd = std::process::Command::new("xdg-open");
-        cmd.arg(&url);
-        cmd.status().map_err(|e| format!("打开浏览器失败: {}", e))?;
-        Ok(())
-    }
+pub async fn open_browser(url: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        #[cfg(windows)]
+        {
+            let mut cmd = std::process::Command::new("cmd");
+            cmd.args(["/C", "start", "", &url]);
+            no_window(&mut cmd);
+            cmd.status().map_err(|e| format!("打开浏览器失败: {}", e))?;
+            Ok(())
+        }
+        #[cfg(not(windows))]
+        {
+            let mut cmd = std::process::Command::new("xdg-open");
+            cmd.arg(&url);
+            cmd.status().map_err(|e| format!("打开浏览器失败: {}", e))?;
+            Ok(())
+        }
+    })
+    .await
+    .map_err(|e| format!("线程异常: {}", e))?
 }
 
 #[tauri::command]
@@ -214,8 +228,19 @@ pub fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), St
 
 /// 检查 GitHub Releases 是否有新版本
 #[tauri::command]
-pub fn check_update() -> crate::update::UpdateInfo {
-    crate::update::check_update()
+pub async fn check_update() -> Result<crate::update::UpdateInfo, String> {
+    let s = tauri::async_runtime::spawn_blocking(crate::update::check_update)
+        .await
+        .map_err(|e| format!("检查更新线程异常: {}", e))?;
+    Ok(s)
+}
+
+/// 列出全部历史版本（用于更新到最新或回退到任意历史版本）
+#[tauri::command]
+pub async fn list_releases() -> Result<Vec<crate::update::Release>, String> {
+    tauri::async_runtime::spawn_blocking(crate::update::list_releases)
+        .await
+        .map_err(|e| format!("线程异常: {}", e))?
 }
 
 /// 下载更新安装包（长任务，推送 update:download 进度）

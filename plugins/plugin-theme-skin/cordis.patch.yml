@@ -1,0 +1,6 @@
+# @dsh-kit/plugin-theme-skin bundle patch: one row mounting the theme-skin plugin.
+# Client-only (browser half); the row exists so the package appears in the
+# Loader and its `dsh.client` roster entry is scanned into the browser boot set.
+- insert:
+    - id: plugin-theme-skin
+      name: '@dsh-kit/plugin-theme-skin'
