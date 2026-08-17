@@ -15,6 +15,8 @@ jobs:
     name: 构建 Windows（NSIS）
     if: false
     runs-on: windows-latest
+    env:
+      GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -53,7 +55,7 @@ jobs:
           fail_on_unmatched_files: true
 
       - name: 发布到 GitCode Releases
-        if: ${{ secrets.GITCODE_TOKEN != '' }}
+        if: env.GITCODE_TOKEN != ''
         env:
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
           GITCODE_REPO: Sunflower816/deepseek-harness-kit
@@ -101,6 +103,8 @@ jobs:
     # 锁定 22.04 作为最旧基线：webkit2gtk-4.1 可用且 glibc 版本更低，
     # 产物可同时运行于 Ubuntu 22.04 / 24.04 与基于 22.04 的麒麟 V10 SP1。
     runs-on: ubuntu-22.04
+    env:
+      GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -141,7 +145,7 @@ jobs:
           fail_on_unmatched_files: true
 
       - name: 发布到 GitCode Releases
-        if: ${{ secrets.GITCODE_TOKEN != '' }}
+        if: env.GITCODE_TOKEN != ''
         env:
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
           GITCODE_REPO: Sunflower816/deepseek-harness-kit
@@ -190,6 +194,8 @@ jobs:
     # 不指定 --target，避免引入额外 target 子目录与跨架构编译复杂度。
     # 产物为未签名 dmg：开源项目可接受，首次打开需在「系统设置 -> 隐私与安全性」放行 Gatekeeper。
     runs-on: macos-latest
+    env:
+      GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
     steps:
       - name: 检出代码
         uses: actions/checkout@v4
@@ -225,7 +231,7 @@ jobs:
           fail_on_unmatched_files: true
 
       - name: 发布到 GitCode Releases
-        if: ${{ secrets.GITCODE_TOKEN != '' }}
+        if: env.GITCODE_TOKEN != ''
         env:
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
           GITCODE_REPO: Sunflower816/deepseek-harness-kit
