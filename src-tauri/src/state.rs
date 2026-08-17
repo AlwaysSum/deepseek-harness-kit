@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 pub const APP_DIR_NAME: &str = "DSHDesktop";
 /// 通过 npx 直接运行官方发布的 DeepSeek Harness CLI（无需克隆源码/构建）
@@ -123,9 +123,26 @@ pub fn dsh_profile_kit_link_dir() -> PathBuf {
     dsh_profile_dir().join("node_modules").join("@dsh-kit")
 }
 
-/// 项目内置插件目录（打包后可改用 resources 目录）
+/// 打包模式下注入的随包插件目录（`bundle.resources` 把 `../plugins` 打进了应用资源目录）。
+/// 开发模式不注入（为 None），仍直接使用仓库 `plugins/`，便于改动代码即时生效。
+static RESOURCE_PLUGINS_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
+
+/// 由 setup 钩子注入打包后的资源插件目录；开发模式为 None（走仓库 plugins/）。
+pub fn set_resource_plugins_dir(dir: Option<PathBuf>) {
+    let _ = RESOURCE_PLUGINS_DIR.set(dir);
+}
+
+/// 项目内置插件目录：打包后为随包资源目录（resources/plugins），开发模式为仓库 plugins/。
 pub fn builtin_plugins_dir() -> PathBuf {
-    let exe = std::env::current_exe().ok();
+    // 生产模式（tauri build 产物）：优先使用随包分发的资源目录
+    #[cfg(not(debug_assertions))]
+    {
+        if let Some(dir) = RESOURCE_PLUGINS_DIR.get().and_then(|d| d.as_ref()) {
+            if dir.is_dir() {
+                return dir.clone();
+            }
+        }
+    }
     // 开发模式：从工作目录找 plugins/（仓库根即 cargo 运行目录，至少向上找两层）
     if let Ok(cwd) = std::env::current_dir() {
         for cand in [cwd.clone(), cwd.join(".."), cwd.join("..").join("..")] {
@@ -135,7 +152,6 @@ pub fn builtin_plugins_dir() -> PathBuf {
             }
         }
     }
-    let _ = exe;
     PathBuf::from("plugins")
 }
 

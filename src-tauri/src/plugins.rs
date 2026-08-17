@@ -332,6 +332,17 @@ fn set_builtin_plugin_enabled_impl(name: &str, enabled: bool) -> Result<(), Stri
     Ok(())
 }
 
+/// 判断 profile 是否已登记过 @dsh-kit 插件 bundle（排除 web profile 核心模板）。
+/// 供 setup 钩子识别「老版本打包空跑置位」场景：插件目录能读到但 profile 从未登记
+/// 任何插件时，重置 plugins_initialized 让前端重新执行默认启用。
+pub fn profile_has_plugin_bundles() -> bool {
+    let manifest = dsh_profile_manifest();
+    let doc = read_manifest(&manifest);
+    bundles_in(&doc).iter().any(|b| {
+        !WEB_PROFILE_TEMPLATE_BUNDLES.contains(&b.as_str()) && b.starts_with("@dsh-kit/")
+    })
+}
+
 /// 首次启动时把全部内置插件默认启用（写入 profile manifest 并建立链接）。
 ///
 /// 仅当 profile manifest 中尚未登记任何 `@dsh-kit/*` 插件 bundle 时执行——
