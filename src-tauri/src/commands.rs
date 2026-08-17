@@ -208,6 +208,13 @@ pub fn get_settings(state: State<AppState>) -> Settings {
     state.settings.lock().unwrap().clone()
 }
 
+/// 当前 dsh UI 主题（"light" / "dark"）：跟随 `~/.dsh/settings.yaml` 的
+/// `ui-theme.preference`，为 `system` 时按 Windows 应用主题模式解析。
+#[tauri::command]
+pub fn get_ui_theme() -> String {
+    crate::state::dsh_ui_theme()
+}
+
 #[tauri::command]
 pub fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), String> {
     let mut s = settings;

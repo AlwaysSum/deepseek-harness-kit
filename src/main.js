@@ -1310,6 +1310,17 @@ async function refresh() {
   }
 }
 
+// 跟随 dsh 设置文档里的 ui-theme.preference（system 时按 Windows 应用主题解析），
+// 让侧边栏 / 控制台外壳与内嵌 Harness 页面保持同一主题
+async function refreshTheme() {
+  try {
+    const theme = await invoke("get_ui_theme");
+    document.documentElement.dataset.theme = theme === "dark" ? "dark" : "light";
+  } catch {
+    /* 命令失败时保持当前主题，静默忽略 */
+  }
+}
+
 // ---------- 启动 ----------
 // 每次启动后台静默检测一次更新（不弹窗）：发现新版本时在左下角「检查更新」按钮加红点并写一条日志
 async function checkUpdateSilently() {
@@ -1345,7 +1356,11 @@ async function checkUpdateSilently() {
   // 轮询状态；busy（启动/停止/部署等长任务）期间暂停，避免与任务争抢资源
   setInterval(() => {
     if (!busy) refresh();
+    refreshTheme();
   }, 2500);
+
+  // 启动时先应用一次主题（随后每 2.5s 轮询跟随）
+  refreshTheme();
 
   // 欢迎与当前状态日志，让控制台一开始就有内容
   logLine("========== DeepSeek Harness 桌面端 ==========", "step");

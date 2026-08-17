@@ -766,3 +766,83 @@ body {
   color: var(--text-dim);
 }
 .skill-btn:disabled { cursor: not-allowed; opacity: 0.55; }
+
+/* ---------- 深色主题 ----------
+   跟随 dsh 设置文档（~/.dsh/settings.yaml）的 ui-theme.preference：
+   main.js 轮询 get_ui_theme 后在 <html> 上置 data-theme="dark"。
+   所有用 CSS 变量的地方自动生效；下面是少量硬编码浅色的覆盖。 */
+html[data-theme="dark"] {
+  --bg: #0f1117;
+  --bg-soft: #161a23;
+  --bg-card: #161a23;
+  --bg-hover: #222a38;
+  --border: #2a3242;
+  --text: #e6e9f0;
+  --text-dim: #96a0b5;
+  --accent: #6d8bff;
+  --accent-strong: #8aa2ff;
+  --accent-soft: #1d2540;
+  --green: #34d399;
+  --red: #f87171;
+  --amber: #fbbf24;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.35), 0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+/* 主标题渐变里的深色锚点 */
+html[data-theme="dark"] .panel-title h1 {
+  background: linear-gradient(90deg, #e6e9f0 30%, var(--accent));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  color: transparent;
+}
+
+/* 状态徽章 / 卡片徽章：浅色底 -> 半透明深色底 */
+html[data-theme="dark"] .pill-green,
+html[data-theme="dark"] .card-badge.ok,
+html[data-theme="dark"] .market-card-action.installed { background: rgba(52, 211, 153, 0.12); }
+html[data-theme="dark"] .pill-red,
+html[data-theme="dark"] .card-badge.bad { background: rgba(248, 113, 113, 0.12); }
+html[data-theme="dark"] .pill-amber,
+html[data-theme="dark"] .card-badge.warn { background: rgba(251, 191, 36, 0.12); }
+html[data-theme="dark"] .pill-gray,
+html[data-theme="dark"] .card-badge { background: #1b212c; }
+
+/* 日志控制台 */
+html[data-theme="dark"] .log-console { background: #0d1017; }
+html[data-theme="dark"] .log-head { background: #161a23; }
+html[data-theme="dark"] .page-wrap { background: #0f1117; }
+html[data-theme="dark"] #page-overlay { background: rgba(15, 17, 23, 0.94); }
+
+/* 输入框 / 列表面板等浅色底 */
+html[data-theme="dark"] .field input[type="text"],
+html[data-theme="dark"] .field input[type="number"],
+html[data-theme="dark"] .search-bar input,
+html[data-theme="dark"] .external-add input,
+html[data-theme="dark"] .external-add .ext-source,
+html[data-theme="dark"] .update-log,
+html[data-theme="dark"] .release-items,
+html[data-theme="dark"] .plugin-list { background: #10141d; }
+
+/* 插件开关底轨 */
+html[data-theme="dark"] .plugin-toggle { background: #3a4254; }
+
+/* 滚动条 */
+html[data-theme="dark"] ::-webkit-scrollbar-thumb { background: #3a4254; }
+html[data-theme="dark"] ::-webkit-scrollbar-thumb:hover { background: #4a5468; }
+
+/* 市场卡片来源标签 */
+html[data-theme="dark"] .market-card-src.github { color: #d0d7de; background: #262c36; border-color: #3a4254; }
+html[data-theme="dark"] .market-card-src.npm { color: #f87171; background: rgba(248, 113, 113, 0.12); }
+
+/* 危险按钮 / code 片段 */
+html[data-theme="dark"] .ext-row-btn.danger,
+html[data-theme="dark"] .skill-btn.danger { background: rgba(248, 113, 113, 0.12); }
+html[data-theme="dark"] .ext-row-btn.danger:hover,
+html[data-theme="dark"] .skill-btn.danger:hover { background: rgba(248, 113, 113, 0.2); }
+html[data-theme="dark"] .market-hero-desc code,
+html[data-theme="dark"] .market-hint code { background: rgba(255, 255, 255, 0.12); }
+
+/* 侧边栏版本号在深色下再压暗一档 */
+html[data-theme="dark"] .sidebar-footer { color: #64748b; }

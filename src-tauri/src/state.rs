@@ -279,6 +279,85 @@ pub fn dsh_version() -> Option<String> {
         .map(|s| s.trim().to_string())
 }
 
+// ---------- UI 主题（跟随 dsh 设置文档） ----------
+
+/// 读取 dsh 设置文档（`~/.dsh/settings.yaml`）里的 `ui-theme.preference`。
+/// dsh 的 Web UI「外观」设置会写入该字段：`system`（跟随系统）/ `light` / `dark`。
+/// 文件不存在或解析失败时返回 "system"。
+pub fn dsh_ui_theme_preference() -> String {
+    let path = dsh_home().join("settings.yaml");
+    let Ok(txt) = std::fs::read_to_string(&path) else {
+        return "system".into();
+    };
+    let mut in_section = false;
+    for line in txt.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        if !in_section {
+            if t.starts_with("ui-theme:") {
+                in_section = true;
+            }
+            continue;
+        }
+        // 离开 ui-theme 段（下一行回到顶层缩进）
+        if !line.starts_with(' ') && !line.starts_with('\t') {
+            break;
+        }
+        if let Some(rest) = t.strip_prefix("preference:") {
+            let v = rest.trim().trim_matches('"').trim_matches('\'').to_string();
+            if !v.is_empty() {
+                return v;
+            }
+        }
+    }
+    "system".into()
+}
+
+/// Windows「应用使用浅色模式」注册表值（AppsUseLightTheme）：0=深色，1=浅色。
+fn windows_apps_light_theme() -> bool {
+    #[cfg(windows)]
+    {
+        if let Ok(out) = std::process::Command::new("reg")
+            .args([
+                "query",
+                r"HKCU\Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+                "/v",
+                "AppsUseLightTheme",
+            ])
+            .output()
+        {
+            let text = String::from_utf8_lossy(&out.stdout);
+            for line in text.lines() {
+                if line.contains("AppsUseLightTheme") {
+                    if let Some(pos) = line.find("0x") {
+                        // "0x0" -> 深色；"0x1" -> 浅色
+                        return !line[pos + 2..].trim().starts_with('0');
+                    }
+                }
+            }
+        }
+    }
+    true
+}
+
+/// 解析 dsh UI 主题为具体 `light` / `dark`：显式设置优先，
+/// `system` 按 Windows 应用主题模式判断。
+pub fn dsh_ui_theme() -> String {
+    match dsh_ui_theme_preference().as_str() {
+        "dark" => "dark".into(),
+        "light" => "light".into(),
+        _ => {
+            if windows_apps_light_theme() {
+                "light".into()
+            } else {
+                "dark".into()
+            }
+        }
+    }
+}
+
 /// 标记部署成功
 pub fn write_dsh_marker(version: &str) -> Result<(), String> {
     if let Some(dir) = dsh_marker().parent() {
