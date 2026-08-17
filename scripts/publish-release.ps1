@@ -95,11 +95,14 @@ Write-Step "待上传：$($Assets -join '，')"
 if ($TagAndPush) {
   $git = (Get-Command git.exe -ErrorAction SilentlyContinue).Source
   if ($git) {
+    # 有代理时让 git 走代理（GitHub 直连不通的环境用 -Proxy 参数）
+    $gitProxyArgs = @()
+    if ($Proxy) { $gitProxyArgs += '-c', "http.proxy=$Proxy", '-c', "https.proxy=$Proxy" }
     if (-not (& $git tag -l $Tag)) { & $git tag $Tag; Write-Ok "已创建本地 tag $Tag" }
     foreach ($remote in @('origin', 'gitcode')) {
-      $r = & $git ls-remote --exit-code --tags "$remote" $Tag 2>$null
+      $r = & $git @gitProxyArgs ls-remote --exit-code --tags "$remote" $Tag 2>$null
       if ($LASTEXITCODE -ne 0) {
-        & $git push "$remote" $Tag 2>&1 | Out-Null
+        & $git @gitProxyArgs push "$remote" $Tag 2>&1 | Out-Null
         if ($LASTEXITCODE -eq 0) { Write-Ok "已推送 tag 到 $remote" } else { Write-Warn "推送 tag 到 $remote 失败（请手动 git push $remote $Tag）" }
       } else {
         Write-Ok "tag 已存在于 $remote"
@@ -124,10 +127,20 @@ function Publish-GitHub {
     $relId = ($r.Body | ConvertFrom-Json).id
     Write-Ok "Release $Tag 已存在，复用 (id=$relId)"
   } else {
+    # GitHub Releases API 只接受 JSON body（-F multipart 会返回 400 Problems parsing JSON）；
+    # 中文经 PowerShell5 传给 curl 会按本地代码页编码，改用 UTF-8 无 BOM 临时文件发送
+    $payload = @{
+      tag_name = $Tag
+      name     = $Tag
+      body     = "自动发布：DeepSeek Harness 桌面端 $Tag"
+    } | ConvertTo-Json -Compress
+    $bodyFile = Join-Path $env:TEMP "dsh-gh-release-$Tag.json"
+    [System.IO.File]::WriteAllText($bodyFile, $payload, (New-Object System.Text.UTF8Encoding($false)))
     $r = Call-Curl @('-X', 'POST', '-H', $auth, '-H', $ua,
-      '-F', "tag_name=$Tag", '-F', "name=$Tag",
-      '-F', "body=自动发布：DeepSeek Harness 桌面端 $Tag",
+      '-H', 'Content-Type: application/json',
+      '--data-binary', "@$bodyFile",
       "$api/releases")
+    Remove-Item $bodyFile -ErrorAction SilentlyContinue
     if ($r.Code -notin @(200, 201)) { throw "创建 GitHub Release 失败 (HTTP $($r.Code)): $($r.Body)" }
     $relId = ($r.Body | ConvertFrom-Json).id
     Write-Ok "GitHub Release $Tag 已创建 (id=$relId)"
