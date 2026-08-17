@@ -41,6 +41,8 @@ pub struct Settings {
     pub plugins_initialized: bool,
     pub skillshub_url: String,
     pub external_plugins: Vec<ExternalPluginCfg>,
+    /// 是否允许局域网扫码访问（webserver 绑定到 0.0.0.0）。
+    pub allow_lan: bool,
 }
 
 impl Default for Settings {
@@ -55,6 +57,7 @@ impl Default for Settings {
             plugins_initialized: false,
             skillshub_url: DEFAULT_SKILLSHUB_URL.into(),
             external_plugins: Vec::new(),
+            allow_lan: false,
         }
     }
 }
@@ -118,11 +121,6 @@ pub fn dsh_profile_manifest() -> PathBuf {
     dsh_profile_dir().join("package.json")
 }
 
-/// profile 的 node_modules/@dsh-kit 链接根目录
-pub fn dsh_profile_kit_link_dir() -> PathBuf {
-    dsh_profile_dir().join("node_modules").join("@dsh-kit")
-}
-
 /// 打包模式下注入的随包插件目录（`bundle.resources` 把 `../plugins` 打进了应用资源目录）。
 /// 开发模式不注入（为 None），仍直接使用仓库 `plugins/`，便于改动代码即时生效。
 static RESOURCE_PLUGINS_DIR: OnceLock<Option<PathBuf>> = OnceLock::new();
@@ -153,6 +151,36 @@ pub fn builtin_plugins_dir() -> PathBuf {
         }
     }
     PathBuf::from("plugins")
+}
+
+/// exe 同级的可写内置插件目录（Windows 安装目录根下的 `plugins/`）。
+/// 这是用户手动放入 / 插件市场下载 / zip·文件夹导入的落盘位置——随包资源目录
+///（`_up_/plugins`）在部分场景只读且属于“随包内置”，用户新增的插件应落在可写目录。
+/// 开发模式（cargo run）下它与仓库工作目录的 `plugins/`重叠，直接复用仓库目录。
+pub fn extra_plugins_dir() -> PathBuf {
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            return parent.join("plugins");
+        }
+    }
+    PathBuf::from("plugins")
+}
+
+/// 全部内置插件根目录（按优先级），用于扫描/合并列出与按名定位插件源码目录：
+/// 1. 随包资源目录（生产为 `_up_/plugins`，开发为仓库 `plugins/`）——官方随附插件；
+/// 2. exe 同级可写目录——用户手动放入或市场下载·导入的插件。
+/// 同名冲突时随包资源优先（避免用户同名覆盖官方插件）。除查重外两者会合并展示。
+pub fn plugin_roots() -> Vec<PathBuf> {
+    let mut roots = Vec::new();
+    let bundled = builtin_plugins_dir();
+    let extra = extra_plugins_dir();
+    if extra != bundled {
+        roots.push(bundled);
+        roots.push(extra);
+    } else {
+        roots.push(bundled);
+    }
+    roots
 }
 
 /// 部署成功标记（写入 dsh.installed 与 dsh.version）
@@ -211,7 +239,7 @@ pub fn node_version_ok(v: &str) -> bool {
 
 // ---------- npx 缓存与 dsh 运行时检测 ----------
 
-/// npm 默认缓存目录（Windows 为 %LOCALAPPDATA%\npm-cache）
+/// npm 默认缓存目录（Windows 为 %LOCALAPPDATA%\npm-cache；Unix 为 ~/.npm）
 pub fn npm_cache_dir() -> Option<PathBuf> {
     if let Ok(c) = std::env::var("npm_config_cache") {
         if !c.is_empty() {
@@ -222,6 +250,9 @@ pub fn npm_cache_dir() -> Option<PathBuf> {
         return Some(PathBuf::from(local).join("npm-cache"));
     }
     if let Some(home) = std::env::var_os("USERPROFILE") {
+        return Some(PathBuf::from(home).join(".npm"));
+    }
+    if let Some(home) = std::env::var_os("HOME") {
         return Some(PathBuf::from(home).join(".npm"));
     }
     None

@@ -3,7 +3,7 @@
 use crate::process::no_window;
 use crate::service::{find_pid_on_port, probe_http, service_url};
 use crate::state::{
-    data_dir, dsh_installed, dsh_version, node_home, node_version_ok, AppState, Settings,
+    data_dir, dsh_installed, dsh_version, node_version_ok, AppState, Settings,
     DEFAULT_REGISTRY, NODE_VERSION,
 };
 use std::sync::atomic::Ordering;
@@ -35,6 +35,8 @@ pub struct Status {
     pub node: NodeInfo,
     pub dsh: DshInfo,
     pub service: ServiceInfo,
+    pub lan_addresses: Vec<String>,
+    pub lan_enabled: bool,
     pub data_dir: String,
     pub settings: Settings,
     pub busy: bool,
@@ -72,9 +74,7 @@ fn build_status(state: &AppState) -> Status {
         },
     };
     if !node.ok {
-        let managed_exe = node_home()
-            .join(format!("node-{}-win-x64", settings.node_version))
-            .join("node.exe");
+        let managed_exe = crate::deploy::node_managed_exe(&settings.node_version);
         if managed_exe.exists() {
             if let Ok(v) =
                 crate::process::run_capture(managed_exe.to_str().unwrap(), &["--version"], None, None)
@@ -112,6 +112,8 @@ fn build_status(state: &AppState) -> Status {
         node,
         dsh,
         service,
+        lan_addresses: crate::net::lan_ipv4_addresses(),
+        lan_enabled: crate::net::webserver_patch_enabled(),
         data_dir: data_dir().display().to_string(),
         settings,
         busy: state.busy.load(Ordering::SeqCst),
@@ -191,7 +193,14 @@ pub async fn open_browser(url: String) -> Result<(), String> {
             cmd.status().map_err(|e| format!("打开浏览器失败: {}", e))?;
             Ok(())
         }
-        #[cfg(not(windows))]
+        #[cfg(target_os = "macos")]
+        {
+            let mut cmd = std::process::Command::new("open");
+            cmd.arg(&url);
+            cmd.status().map_err(|e| format!("打开浏览器失败: {}", e))?;
+            Ok(())
+        }
+        #[cfg(target_os = "linux")]
         {
             let mut cmd = std::process::Command::new("xdg-open");
             cmd.arg(&url);
@@ -228,9 +237,17 @@ pub fn set_settings(state: State<AppState>, settings: Settings) -> Result<(), St
     if s.node_version.trim().is_empty() {
         s.node_version = NODE_VERSION.into();
     }
+    // 局域网访问开关变化时，写入/移除 profile 中 webserver host=0.0.0.0 覆盖。
+    crate::net::set_webserver_patch(s.allow_lan, s.port)?;
     crate::state::save_settings(&s)?;
     *state.settings.lock().unwrap() = s;
     Ok(())
+}
+
+/// 返回本机当前可访问的局域网 IPv4 地址列表（扫码 URL 使用主地址）。
+#[tauri::command]
+pub fn get_lan_addresses() -> Vec<String> {
+    crate::net::lan_ipv4_addresses()
 }
 
 /// 检查 GitHub Releases 是否有新版本

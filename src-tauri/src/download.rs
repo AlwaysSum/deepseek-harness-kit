@@ -88,3 +88,28 @@ pub fn extract_zip(zip_path: &Path, dest: &Path) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// 解压 .tar.xz 到目标目录（Unix 便携 Node 包格式）。
+/// 直接调用系统 `tar -xf`：macOS bsdtar / Linux GNU tar 均能按扩展名自动解压 xz，
+/// 无需引入额外原生依赖；与 Windows 端 extract_zip 互为平台分支。
+#[cfg(not(windows))]
+pub fn extract_tar_xz(archive: &Path, dest: &Path) -> Result<(), String> {
+    std::fs::create_dir_all(dest).map_err(|e| e.to_string())?;
+    let status = std::process::Command::new("tar")
+        .arg("-xf")
+        .arg(archive)
+        .arg("-C")
+        .arg(dest)
+        .spawn()
+        .map_err(|e| format!("无法启动 tar: {}", e))?
+        .wait()
+        .map_err(|e| format!("等待 tar 失败: {}", e))?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "tar 解压失败（退出码 {}）",
+            status.code().unwrap_or(-1)
+        ))
+    }
+}

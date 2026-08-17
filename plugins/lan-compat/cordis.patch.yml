@@ -1,0 +1,9 @@
+# dsh bundle layer: mount the lan-compat host-only shim. It registers a
+# webServer.tapIndex that injects a crypto.randomUUID polyfill into index.html,
+# so browsers in insecure (HTTP + non-loopback) contexts -- e.g. a phone
+# scanning a LAN IP like http://192.168.104.8:3080/ -- don't crash on missing
+# Crypto.randomUUID. The host half runs in Node and only injects a <script>;
+# there is no browser client module, so no dsh.client declaration is needed.
+- insert:
+    - id: lan-compat
+      name: '@dsh-kit/lan-compat'

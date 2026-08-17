@@ -1,0 +1,16 @@
+{
+    "name": "@dsh-kit/lan-compat",
+    "version": "0.1.0",
+    "description": "LAN HTTP compatibility shim: polyfills crypto.randomUUID for insecure-context browsers (e.g. a phone scanning a LAN IP over plain HTTP), where Crypto.randomUUID is gated away by the browser's secure-context rule.",
+    "type": "module",
+    "exports": {
+        ".": "./dsh/index.js",
+        "./dsh": "./dsh/index.js",
+        "./package.json": "./package.json"
+    },
+    "dsh": {
+        "bundle": {
+            "patch": "./cordis.patch.yml"
+        }
+    }
+}

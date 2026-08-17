@@ -3,5 +3,5 @@
   "identifier": "default",
   "description": "Main window capability for dsh-desktop",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "core:window:allow-set-theme"]
 }

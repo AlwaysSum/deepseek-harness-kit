@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
+import QRCode from "qrcode";
 
 // ---------- DOM ----------
 const $ = (id) => document.getElementById(id);
@@ -74,10 +76,23 @@ const el = {
   btnCloseSkills: $("btn-close-skills"),
   btnCloseSkills2: $("btn-close-skills-2"),
   btnSkillsRefresh: $("btn-skills-refresh"),
+  btnSidebarQr: $("btn-sidebar-qr"),
+  modalQr: $("modal-qr"),
+  btnCloseQr: $("btn-close-qr"),
+  btnCloseQr2: $("btn-close-qr-2"),
+  qrCanvas: $("qr-canvas"),
+  qrEmpty: $("qr-empty"),
+  qrLanUrl: $("qr-lan-url"),
+  qrLocalUrl: $("qr-local-url"),
+  qrCopy: $("qr-copy"),
+  qrLanHint: $("qr-lan-hint"),
+  qrAllowLan: $("qr-allow-lan"),
+  qrMulti: $("qr-multi"),
   setRegistry: $("set-registry"),
   setPort: $("set-port"),
   setAutoStart: $("set-auto-start"),
   setStopOnExit: $("set-stop-on-exit"),
+  setAllowLan: $("set-allow-lan"),
   setDataDir: $("set-data-dir"),
   setSkillshubUrl: $("set-skillshub-url"),
   badges: {
@@ -1089,6 +1104,7 @@ function openSettings() {
   el.setPort.value = settings.port ?? 3080;
   el.setAutoStart.checked = settings.auto_start_after_deploy !== false;
   el.setStopOnExit.checked = settings.stop_on_exit !== false;
+  el.setAllowLan.checked = !!settings.allow_lan;
   el.setSkillshubUrl.value = settings.skillshub_url ?? "";
   el.setDataDir.value = status?.data_dir ?? "";
   el.modal.hidden = false;
@@ -1109,6 +1125,7 @@ el.btnSaveSettings.addEventListener("click", async () => {
     port: Math.min(65535, Math.max(1, Number(el.setPort.value) || 3080)),
     auto_start_after_deploy: el.setAutoStart.checked,
     stop_on_exit: el.setStopOnExit.checked,
+    allow_lan: el.setAllowLan.checked,
     skillshub_url: el.setSkillshubUrl.value.trim() || "https://api.skillhub.cn/api/skills?sortBy=score&pageSize=100",
   };
   const portChanged = (settings?.port ?? 3080) !== next.port;
@@ -1133,6 +1150,116 @@ el.btnSaveSettings.addEventListener("click", async () => {
   } catch (e) {
     logLine(`保存设置失败: ${e}`, "err");
   }
+});
+
+// ---------- 扫码访问 ----------
+function lanAddresses() {
+  if (status && Array.isArray(status.lan_addresses) && status.lan_addresses.length) return status.lan_addresses;
+  return [];
+}
+function localUrl() {
+  const port = settings?.port ?? 3080;
+  return `http://127.0.0.1:${port}/`;
+}
+function lanUrl(ip) {
+  const port = settings?.port ?? 3080;
+  return `http://${ip}:${port}/`;
+}
+async function drawQr(text) {
+  const canvas = el.qrCanvas;
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  if (!text) {
+    el.qrEmpty.hidden = false;
+    return;
+  }
+  try {
+    await QRCode.toCanvas(canvas, text, {
+      width: 280,
+      margin: 2,
+      errorCorrectionLevel: "M",
+      color: { dark: "#000000", light: "#ffffff" },
+    });
+    el.qrEmpty.hidden = true;
+  } catch (e) {
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    el.qrEmpty.hidden = false;
+    el.qrEmpty.textContent = `二维码生成失败：${e}`;
+  }
+}
+function renderQrModal() {
+  const addrs = lanAddresses();
+  const port = settings?.port ?? 3080;
+  el.qrLocalUrl.value = localUrl();
+  el.qrAllowLan.checked = !!settings?.allow_lan;
+  const lanEnabled = !!settings?.allow_lan && !!status?.lan_enabled;
+  if (!addrs.length) {
+    el.qrEmpty.hidden = false;
+    el.qrEmpty.textContent = "未检测到局域网地址，请检查网络连接后重试";
+    el.qrLanUrl.value = "";
+    el.qrLanHint.textContent = "未检测到可用的局域网 IP。";
+    el.qrLanHint.className = "qr-lan-hint warn";
+    el.qrMulti.textContent = "";
+    return;
+  }
+  el.qrEmpty.hidden = true;
+  const primary = addrs[0];
+  const url = lanUrl(primary);
+  el.qrLanUrl.value = url;
+  drawQr(url);
+  if (addrs.length > 1) {
+    el.qrMulti.textContent = `检测到多个局域网地址：${addrs.join("、")}。`;
+    el.qrMulti.hidden = false;
+  } else {
+    el.qrMulti.textContent = "";
+    el.qrMulti.hidden = true;
+  }
+  if (lanEnabled) {
+    el.qrLanHint.textContent = "已开启局域网访问，移动端可直接扫码访问。";
+    el.qrLanHint.className = "qr-lan-hint ok";
+  } else {
+    el.qrLanHint.textContent = "局域网访问尚未开启：请勾选上方开关并重启服务后，移动端才能扫码连接。";
+    el.qrLanHint.className = "qr-lan-hint warn";
+  }
+}
+function openQrModal() {
+  renderQrModal();
+  el.modalQr.hidden = false;
+}
+el.btnSidebarQr.addEventListener("click", openQrModal);
+el.btnCloseQr.addEventListener("click", () => (el.modalQr.hidden = true));
+el.btnCloseQr2.addEventListener("click", () => (el.modalQr.hidden = true));
+el.modalQr.addEventListener("click", (e) => {
+  if (e.target === el.modalQr) el.modalQr.hidden = true;
+});
+el.qrCopy.addEventListener("click", async () => {
+  const url = el.qrLanUrl.value;
+  if (!url) return;
+  try {
+    await navigator.clipboard.writeText(url);
+    logLine(`已复制局域网地址：${url}`, "ok");
+  } catch (e) {
+    logLine(`复制失败：${e}`, "err");
+  }
+});
+el.qrAllowLan.addEventListener("change", async () => {
+  if (!settings) return;
+  const target = el.qrAllowLan.checked;
+  const prev = settings.allow_lan;
+  if (target === prev) { renderQrModal(); return; }
+  const next = { ...settings, allow_lan: target };
+  try {
+    await invoke("set_settings", { settings: next });
+    settings = next;
+    logLine(target ? "已开启局域网访问（重启服务后生效）" : "已关闭局域网访问（重启服务后生效）", "ok");
+    refresh();
+  } catch (e) {
+    logLine(`保存局域网设置失败：${e}`, "err");
+    el.qrAllowLan.checked = prev;
+  }
+  renderQrModal();
 });
 
 // ---------- 更新检查与下载 ----------
@@ -1315,7 +1442,14 @@ async function refresh() {
 async function refreshTheme() {
   try {
     const theme = await invoke("get_ui_theme");
-    document.documentElement.dataset.theme = theme === "dark" ? "dark" : "light";
+    const dark = theme === "dark";
+    document.documentElement.dataset.theme = dark ? "dark" : "light";
+    // 同步原生窗口主题（标题栏 / 最小化 / 最大化 / 关闭等按钮区域跟随深色）
+    try {
+      await getCurrentWindow().setTheme(dark ? "dark" : "light");
+    } catch {
+      /* 无窗口主题权限或环境不支持时忽略，应用内 CSS 主题仍生效 */
+    }
   } catch {
     /* 命令失败时保持当前主题，静默忽略 */
   }

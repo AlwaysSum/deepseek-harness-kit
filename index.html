@@ -60,6 +60,14 @@
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33h0a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51h0a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82v0a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
             </svg>
           </button>
+          <button id="btn-sidebar-qr" class="side-btn" title="扫码访问（局域网）">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="3" width="7" height="7" />
+              <rect x="14" y="3" width="7" height="7" />
+              <rect x="3" y="14" width="7" height="7" />
+              <path d="M14 14h3v3h-3z M20 14h1 M14 20h1 M17 17v1 M17 21h-1" />
+            </svg>
+          </button>
           <button id="btn-sidebar-update" class="side-btn" title="检查更新">
             <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
               <path d="M21 12a9 9 0 1 1-2.64-6.36" />
@@ -164,6 +172,10 @@
             <input id="set-stop-on-exit" type="checkbox" />
             <span>退出应用时自动停止服务</span>
           </label>
+          <label class="field check">
+            <input id="set-allow-lan" type="checkbox" />
+            <span>允许局域网访问（重启服务后生效，绑定 0.0.0.0；同网络手机扫码可用）</span>
+          </label>
           <label class="field">
             <span>数据目录</span>
             <input id="set-data-dir" type="text" readonly />
@@ -175,6 +187,43 @@
         </div>
         <div class="modal-foot">
           <button id="btn-save-settings" class="btn-primary">保存</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 扫码访问弹窗 -->
+    <div id="modal-qr" class="modal" hidden>
+      <div class="modal-box modal-qr-box">
+        <div class="modal-head">
+          <h2>扫码访问 DeepSeek Harness</h2>
+          <button id="btn-close-qr" class="icon-btn">✕</button>
+        </div>
+        <div class="modal-body qr-body">
+          <p class="qr-desc">使用同一局域网内的手机或平板扫描下方二维码，即可访问本机 Harness 管理界面。</p>
+          <div class="qr-canvas-wrap">
+            <canvas id="qr-canvas" width="280" height="280"></canvas>
+            <div id="qr-empty" class="qr-empty">未检测到局域网地址</div>
+          </div>
+          <div class="qr-url-row">
+            <span class="qr-url-label">局域网地址</span>
+            <input id="qr-lan-url" type="text" readonly spellcheck="false" />
+            <button id="qr-copy" type="button" class="btn-secondary">复制</button>
+          </div>
+          <div class="qr-url-row">
+            <span class="qr-url-label">本机地址</span>
+            <input id="qr-local-url" type="text" readonly spellcheck="false" />
+          </div>
+          <div id="qr-lan-hint" class="qr-lan-hint"></div>
+          <div class="qr-lan-toggle">
+            <label class="field check">
+              <input id="qr-allow-lan" type="checkbox" />
+              <span>允许局域网访问（需重启服务后生效；开启后本机 Harness 将监听 0.0.0.0，注意网络范围内可直接访问）</span>
+            </label>
+          </div>
+          <p id="qr-multi" class="qr-multi"></p>
+        </div>
+        <div class="modal-foot">
+          <button id="btn-close-qr-2" class="btn-primary">关闭</button>
         </div>
       </div>
     </div>

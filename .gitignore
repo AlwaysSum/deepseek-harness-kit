@@ -12,3 +12,8 @@ src-tauri/gen/
 
 # local pnpm store
 .pnpm-store/
+
+# local tools / test dirs
+.vscode/
+.dsh-test/
+.writerHelper/

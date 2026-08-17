@@ -3,6 +3,7 @@ mod deploy;
 mod download;
 mod firewall;
 mod hub;
+mod net;
 mod plugins;
 mod process;
 mod service;
@@ -52,6 +53,7 @@ pub fn run() {
             commands::open_browser,
             commands::get_settings,
             commands::set_settings,
+            commands::get_lan_addresses,
             commands::get_ui_theme,
             commands::check_update,
             commands::list_releases,

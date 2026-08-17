@@ -91,7 +91,7 @@
 ```sh
 npm install        # 或 pnpm install
 npm run tauri dev  # 开发模式
-npm run tauri build  # 打包（NSIS 安装包输出到 src-tauri/target/release/bundle/）
+npm run tauri build  # 打包：Windows 输出 NSIS（bundle/nsis/）；Linux 输出 deb（bundle/deb/，麒麟/UOS/Ubuntu 可装）；macOS 输出 dmg（bundle/dmg/）
 ```
 
 ## 部署流程说明
@@ -124,8 +124,8 @@ npm run tauri build  # 打包（NSIS 安装包输出到 src-tauri/target/release
     .\scripts\publish-release.ps1 -Build -TagAndPush
     # 常用参数：-Version 0.2.0（默认读 tauri.conf.json）/-SkipGitHub /-SkipGitCode /-Proxy http://127.0.0.1:7890
     ```
-  - **GitHub Actions 自动发布**：打 tag `v0.1.0` 后自动构建并发布到 GitHub；若在仓库
-    Settings → Secrets 配置了 `GITCODE_TOKEN`，则同步发布到 GitCode。
+  - **GitHub Actions 自动发布**：打 tag `v0.1.0` 后自动构建 Windows（NSIS）、Linux（deb，麒麟 / UOS / Ubuntu 可装）与 macOS（dmg，Apple Silicon，未签名）安装包并发布到
+    GitHub；若在仓库 Settings -> Secrets 配置了 `GITCODE_TOKEN`，则同步发布到 GitCode。
 - 版本号三处保持一致：`package.json`、`src-tauri/Cargo.toml`、`src-tauri/tauri.conf.json`。
 
 ## 国内网络构建提示（仅对源码构建者）
@@ -145,7 +145,7 @@ npm run tauri build  # 打包（NSIS 安装包输出到 src-tauri/target/release
 | 前端 | 原生 JS + [Vite 6](https://vitejs.dev) |
 | 后端 | Rust：`ureq` 下载（支持系统代理）、`zip` 解压、进程树管理 |
 | 运行时 | 官方 `@deepseek-ai/dsh` npm 包（`npx` 直接调用，无需源码构建） |
-| 打包 | NSIS 安装包（`currentUser`，无需管理员权限） |
+| 打包 | Windows：NSIS 安装包（`currentUser`，无需管理员权限）；Linux：deb（麒麟 / UOS / Ubuntu）；macOS：dmg（Apple Silicon，未签名，首次打开需放行 Gatekeeper） |
 
 ## 相关链接
 

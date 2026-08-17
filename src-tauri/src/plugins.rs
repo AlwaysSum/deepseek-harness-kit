@@ -1,8 +1,10 @@
 //! 内置插件管理：列出 / 启用 / 停用 dsh 内置插件。
 //!
-//! 每个内置插件是一个遵循 `@dsh-kit/*` 结构的包（`package.json` + `cordis.patch.yml`
-//! + `lib/index.js`(host) + `lib/client.js`(browser)）。启用即把它 junction 链接进
-//! dsh profile（`~/.dsh/profiles/web/node_modules/@dsh-kit/`），并在 profile 的
+//! 每个内置插件是一个带 `dsh` 段的 npm 包（`package.json` + `cordis.patch.yml`
+//! + `lib/index.js`(host) + `lib/client.js`(browser)），包名可带任意 scope
+//! （`@dsh-kit/*`、`@deepseek-ai/*`、`@liustack/*` 等）或不带 scope（如
+//! `dsh-better-sidebar`）。启用即把它 junction 链接进 dsh profile 的
+//! `node_modules/`（按 package.json 的 name 字段原样拆分路径），并在 profile 的
 //! `package.json` 的 `dsh.profile.bundles` 里登记其 bundle；停用则撤销两者。
 //! 服务重启后生效（与手写 install.mjs 同一机制）。
 //!
@@ -10,8 +12,8 @@
 //! 安装进 `plugins/` 后与内置插件一样可启停，并在首次运行时默认一并启用。
 
 use crate::state::{
-    builtin_plugins_dir, dsh_profile_dir, dsh_profile_kit_link_dir, dsh_profile_manifest,
-    save_settings, AppState, ExternalPluginCfg,
+    builtin_plugins_dir, dsh_profile_dir, dsh_profile_manifest,
+    plugin_roots, save_settings, AppState, ExternalPluginCfg,
 };
 use serde::Serialize;
 use serde_json::{json, Value};
@@ -77,6 +79,31 @@ fn load_plugin_entries(root: &PathBuf) -> Result<Vec<(String, Value, PathBuf)>, 
     Ok(entries)
 }
 
+/// 扫描全部内置插件根目录（随包资源目录 + exe 同级可写目录），按包名去重合并。
+/// 同名冲突时随包资源目录优先（避免用户同名覆盖官方内置插件）。
+/// 返回 (目录名, package.json 的 Value, 插件源码目录)；按目录名排序。
+fn load_all_plugin_entries() -> Result<Vec<(String, Value, PathBuf)>, String> {
+    let mut seen: std::collections::HashMap<String, ()> = std::collections::HashMap::new();
+    let mut out: Vec<(String, Value, PathBuf)> = Vec::new();
+    for root in plugin_roots() {
+        for (dir_name, pkg, dir) in load_plugin_entries(&root)? {
+            let pkg_name = pkg
+                .get("name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_string();
+            // 已由更高优先级（随包资源）收录的同名包，跳过
+            if !pkg_name.is_empty() && seen.contains_key(&pkg_name) {
+                continue;
+            }
+            seen.insert(pkg_name, ());
+            out.push((dir_name, pkg, dir));
+        }
+    }
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(out)
+}
+
 fn dirname_plugin_name(dir: &PathBuf) -> String {
     dir.file_name()
         .map(|s| s.to_string_lossy().to_string())
@@ -122,6 +149,33 @@ const WEB_PROFILE_TEMPLATE_BUNDLES: &[&str] = &[
     "@deepseek-ai/dsh-web-app",
 ];
 
+/// 无法与 web profile 组合的 bundle（如终端模式前端 dsh-TUI）：它的
+/// cordis.patch.yml 会 `insert` 与 dsh-web-app 相同的 storage / storage-json /
+/// storage-domain / workspace / agent-presets / cordis-host-runner 等行，
+/// 同挂载时 dsh 组装插件树直接报 "duplicate loader entry id" 启动失败。
+/// 桌面端只启动 `dsh web`，这类模式型插件不默认启用、也不允许在 web profile
+/// 里启用；已登记的历史配置会在启动前自动清理（见 prune_web_incompatible_bundles）。
+const WEB_INCOMPATIBLE_BUNDLES: &[&str] = &["@deepseek-harness-tui/dsh-tui"];
+
+/// 计算插件链接目标：profile node_modules 下按包名原样拆分路径。
+/// 带 scope 的包（如 `@dsh-kit/plugin-x`、`@deepseek-ai/dsh-fs-local`、
+/// `@liustack/modlens`）链接到 `node_modules/<scope>/<name>`；无 scope 的包
+/// （如 `dsh-better-sidebar`）链接到 `node_modules/<name>` 顶层。dsh 内载器按
+/// package.json 的 name 字段从 profile 根 node_modules 解析 bundle，链接
+/// 路径必须与 name 字段完全一致，否则 dsh 启动报 "Cannot find package"。
+fn plugin_link_path(name: &str) -> PathBuf {
+    let nm_root = dsh_profile_dir().join("node_modules");
+    let parts: Vec<&str> = name.split('/').collect();
+    if parts.is_empty() {
+        return nm_root;
+    }
+    let mut link_path = nm_root;
+    for part in parts {
+        link_path = link_path.join(part);
+    }
+    link_path
+}
+
 /// 确保 `dsh.profile.bundles` 始终包含 web profile 核心模板 bundles：缺失的按模板顺序
 /// 前置补齐，已存在的保持原位不动。核心 bundle 由 dsh 安装提供，不需要进 `dependencies`。
 fn ensure_core_bundles(mut bundles: Vec<String>) -> Vec<String> {
@@ -142,6 +196,34 @@ fn link_plugin(src: &PathBuf, dst: &PathBuf) -> Result<(), String> {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| PathBuf::from("."));
     fs::create_dir_all(&parent).map_err(|e| e.to_string())?;
+
+    // 插件是否自带 node_modules（如 dsh-better-sidebar 携带 xterm/ws/node-pty
+    // 等自有依赖）。这类插件的 host 端往往直接 `import "@deepseek-ai/dsh-settings"`
+    // 等运行时包，若用 junction link，Node ESM 会顺着物理路径解析，找不到
+    // profile/node_modules/@deepseek-ai/*；必须复制成真实目录，让 Node 向上
+    // 解析时能落到 profile 的运行时包。无自含 node_modules 的插件（如
+    // plugin-file-explorer）走 cordis DI 不直接 import 外部包，junction 安全
+    // 且更快。
+    let has_self_contained_nm = src.join("node_modules").is_dir();
+
+    // 自含依赖插件：若 dst 已是真实目录且 package.json version 与源一致，
+    // 说明上次已复制且源未更新，直接跳过，避免每次启动都重复制几十 MB。
+    if has_self_contained_nm && dst.is_dir() {
+        let is_symlink = fs::symlink_metadata(dst)
+            .map_err(|e| e.to_string())?
+            .file_type()
+            .is_symlink();
+        if !is_symlink {
+            if let (Some(src_v), Some(dst_v)) =
+                (read_pkg_version(src), read_pkg_version(dst))
+            {
+                if src_v == dst_v {
+                    return Ok(());
+                }
+            }
+        }
+    }
+
     if dst.exists() {
         // 已存在的 junction / 目录需要先清理
         let meta = fs::symlink_metadata(dst).map_err(|e| e.to_string())?;
@@ -153,15 +235,24 @@ fn link_plugin(src: &PathBuf, dst: &PathBuf) -> Result<(), String> {
             fs::remove_file(dst).map_err(|e| e.to_string())?;
         }
     }
-    // 尝试先 junction（Windows 目录链接）
-    #[cfg(windows)]
-    {
-        if std::os::windows::fs::symlink_dir(src, dst).is_ok() {
-            return Ok(());
+    // 无自含 node_modules 的插件优先 junction（快）；自含依赖插件跳过 junction
+    if !has_self_contained_nm {
+        #[cfg(windows)]
+        {
+            if std::os::windows::fs::symlink_dir(src, dst).is_ok() {
+                return Ok(());
+            }
         }
     }
-    // 回退：递归复制
+    // 回退或自含依赖插件：递归复制
     copy_dir(src, dst)
+}
+
+/// 读取插件目录下 package.json 的 version 字段（用于 link 跳过判断）。
+fn read_pkg_version(dir: &PathBuf) -> Option<String> {
+    let content = fs::read_to_string(dir.join("package.json")).ok()?;
+    let v: Value = serde_json::from_str(&content).ok()?;
+    v.get("version")?.as_str().map(|s| s.to_string())
 }
 
 fn copy_dir(src: &PathBuf, dst: &PathBuf) -> Result<(), String> {
@@ -206,12 +297,11 @@ pub async fn list_builtin_plugins() -> Result<Vec<BuiltinPluginInfo>, String> {
 }
 
 fn list_builtin_plugins_impl() -> Result<Vec<BuiltinPluginInfo>, String> {
-    let root = builtin_plugins_dir();
     let manifest = dsh_profile_manifest();
     let doc = read_manifest(&manifest);
     let bundles: BTreeMap<String, ()> = bundles_in(&doc).into_iter().map(|b| (b, ())).collect();
     let mut out = Vec::new();
-    let entries = load_plugin_entries(&root)?;
+    let entries = load_all_plugin_entries()?;
     for (_dir_name, pkg, _dir) in entries {
         let package_name = pkg
             .get("name")
@@ -254,14 +344,20 @@ pub async fn set_builtin_plugin_enabled(name: String, enabled: bool) -> Result<(
 }
 
 fn set_builtin_plugin_enabled_impl(name: &str, enabled: bool) -> Result<(), String> {
-    let root = builtin_plugins_dir();
     let manifest = dsh_profile_manifest();
     let profile_dir = dsh_profile_dir();
-    let link_dir = dsh_profile_kit_link_dir();
 
-    // 在 plugins 目录里定位该包的源码目录
+    // 模式型插件（如 dsh-TUI）无法与 web profile 组合，启用只会让 dsh 启动失败
+    if enabled && WEB_INCOMPATIBLE_BUNDLES.contains(&name) {
+        return Err(format!(
+            "插件 {} 是终端模式前端，无法与 dsh web 界面组合进同一个 profile（bundle 补丁与 dsh-web-app 的 storage/workspace 等行冲突，dsh 启动会报 duplicate loader entry id）；桌面端不支持启用它。",
+            name
+        ));
+    }
+
+    // 在全部插件根目录（随包资源 + exe 同级可写）里定位该包的源码目录
     let mut src_dir = None;
-    for (_dir_name, pkg, dir) in load_plugin_entries(&root)? {
+    for (_dir_name, pkg, dir) in load_all_plugin_entries()? {
         if pkg.get("name").and_then(|n| n.as_str()) == Some(name) {
             src_dir = Some(dir);
             break;
@@ -269,12 +365,7 @@ fn set_builtin_plugin_enabled_impl(name: &str, enabled: bool) -> Result<(), Stri
     }
     let src_dir = src_dir
         .ok_or_else(|| format!("未找到内置插件: {}", name))?;
-    // 链接目标目录名取自包名的 @scope/name 的 name 段
-    let link_name = name
-        .split('/')
-        .last()
-        .ok_or_else(|| "非法插件名".to_string())?;
-    let link_path = link_dir.join(link_name);
+    let link_path = plugin_link_path(name);
 
     if enabled {
         // 1) 链接源码目录
@@ -332,6 +423,42 @@ fn set_builtin_plugin_enabled_impl(name: &str, enabled: bool) -> Result<(), Stri
     Ok(())
 }
 
+/// 从 web profile 清理无法组合的 bundle：撤销 node_modules 链接，并从 manifest
+/// 的 dependencies / dsh.profile.bundles 移除。用于修复历史配置把模式型插件
+/// （如 dsh-TUI）登记进 web profile 后 dsh 启动即失败（duplicate loader entry id）
+/// 的场景；无冲突 bundle 时为空操作。
+pub fn prune_web_incompatible_bundles() -> Result<(), String> {
+    let manifest = dsh_profile_manifest();
+    let doc = read_manifest(&manifest);
+    let mut touched = false;
+    for name in bundles_in(&doc) {
+        if WEB_INCOMPATIBLE_BUNDLES.contains(&name.as_str()) {
+            let link_path = plugin_link_path(&name);
+            if link_path.exists() {
+                let _ = unlink_plugin(&link_path);
+            }
+            touched = true;
+        }
+    }
+    if !touched {
+        return Ok(());
+    }
+    let mut doc = read_manifest(&manifest);
+    if let Some(deps) = doc.get_mut("dependencies").and_then(|d| d.as_object_mut()) {
+        for name in WEB_INCOMPATIBLE_BUNDLES {
+            deps.remove(*name);
+        }
+    }
+    let mut bundles = bundles_in(&doc);
+    bundles.retain(|b| !WEB_INCOMPATIBLE_BUNDLES.contains(&b.as_str()));
+    doc["dsh"] = json!({
+        "profile": {
+            "bundles": ensure_core_bundles(bundles)
+        }
+    });
+    write_manifest(&manifest, &doc)
+}
+
 /// 判断 profile 是否已登记过 @dsh-kit 插件 bundle（排除 web profile 核心模板）。
 /// 供 setup 钩子识别「老版本打包空跑置位」场景：插件目录能读到但 profile 从未登记
 /// 任何插件时，重置 plugins_initialized 让前端重新执行默认启用。
@@ -339,7 +466,8 @@ pub fn profile_has_plugin_bundles() -> bool {
     let manifest = dsh_profile_manifest();
     let doc = read_manifest(&manifest);
     bundles_in(&doc).iter().any(|b| {
-        !WEB_PROFILE_TEMPLATE_BUNDLES.contains(&b.as_str()) && b.starts_with("@dsh-kit/")
+        // 除 web profile 核心模板外的任何 bundle 都算“已配置插件”（含 dsh-TUI 、modlens 等各种命名空间）
+        !WEB_PROFILE_TEMPLATE_BUNDLES.contains(&b.as_str())
     })
 }
 
@@ -368,20 +496,22 @@ pub async fn ensure_builtin_plugins_default_enabled(
 fn ensure_builtin_plugins_default_enabled_impl(
     external: &[ExternalPluginCfg],
 ) -> Result<(), String> {
-    let root = builtin_plugins_dir();
+    // 先清理历史配置里误登记的模式型 bundle（如 dsh-TUI），避免 dsh 启动失败
+    let _ = prune_web_incompatible_bundles();
     let manifest = dsh_profile_manifest();
     let doc = read_manifest(&manifest);
     let bundles: Vec<String> = bundles_in(&doc);
 
     // 仅当不存在任何 @dsh-kit/* 插件 bundle（排除 web profile 核心模板）时才视为首次运行
     let has_plugin_bundle = bundles.iter().any(|b| {
-        !WEB_PROFILE_TEMPLATE_BUNDLES.contains(&b.as_str()) && b.starts_with("@dsh-kit/")
+        // 任何非核心模板 bundle（含 dsh-TUI 、modlens 等）都表示已配置过插件
+        !WEB_PROFILE_TEMPLATE_BUNDLES.contains(&b.as_str())
     });
     if has_plugin_bundle {
         return Ok(());
     }
 
-    let entries = load_plugin_entries(&root)?;
+    let entries = load_all_plugin_entries()?;
     for (_dir_name, pkg, _dir) in entries {
         let name = pkg
             .get("name")
@@ -391,6 +521,11 @@ fn ensure_builtin_plugins_default_enabled_impl(
         if name.is_empty() {
             continue;
         }
+        // 模式型插件不能进 web profile，默认启用时跳过
+        if WEB_INCOMPATIBLE_BUNDLES.contains(&name.as_str()) {
+            continue;
+        }
+        // 默认启用全部内置插件（包括 dsh-TUI、modlens、@dsh-kit/*）：链接 + 写 manifest。
         // 已启用则跳过；否则启用（链接 + 写 manifest）
         if bundles.iter().any(|b| b == &name) {
             continue;

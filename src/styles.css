@@ -846,3 +846,35 @@ html[data-theme="dark"] .market-hint code { background: rgba(255, 255, 255, 0.12
 
 /* 侧边栏版本号在深色下再压暗一档 */
 html[data-theme="dark"] .sidebar-footer { color: #64748b; }
+
+
+/* ---------- 扫码访问弹窗 ---------- */
+.modal-qr-box { width: 420px; }
+.qr-body { align-items: center; text-align: center; }
+.qr-desc { color: var(--text-dim); font-size: 12.5px; line-height: 1.6; text-align: left; }
+.qr-canvas-wrap {
+  position: relative;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: #fff;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.qr-canvas-wrap canvas { display: block; width: 280px; height: 280px; image-rendering: pixelated; }
+.qr-empty { color: var(--text-dim); font-size: 13px; position: absolute; }
+.qr-url-row { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; }
+.qr-url-label { flex: none; color: var(--text-dim); font-size: 12px; width: 64px; }
+.qr-url-row input {
+  flex: 1; min-width: 0;
+  background: #f8fafc; border: 1px solid var(--border); color: var(--text);
+  padding: 8px 10px; border-radius: 8px; font-size: 12.5px;
+}
+.qr-url-row input:read-only { color: var(--text); }
+.qr-url-row .btn-secondary { flex: none; padding: 6px 12px; }
+.qr-lan-hint { font-size: 12px; line-height: 1.5; text-align: left; width: 100%; padding: 8px 10px; border-radius: 8px; }
+.qr-lan-hint.ok { color: #166534; background: #ecfdf3; border: 1px solid rgba(22,163,74,.25); }
+.qr-lan-hint.warn { color: var(--amber); background: #fffbeb; border: 1px solid rgba(180,83,9,.2); }
+.qr-lan-toggle { width: 100%; text-align: left; }
+.qr-lan-toggle .field.check span { font-size: 12.5px; line-height: 1.5; }
+.qr-multi { width: 100%; color: var(--text-dim); font-size: 11.5px; text-align: left; line-height: 1.5; }
+

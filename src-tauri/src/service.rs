@@ -35,7 +35,14 @@ pub fn probe_http(port: u16) -> bool {
     }
 }
 
-/// 通过 netstat 查找占用端口的进程 PID
+/// node 进程的可执行名，用于识别端口占用者是否为残留的 dsh/node 进程。
+#[cfg(windows)]
+const NODE_PROCESS_NAME: &str = "node.exe";
+#[cfg(not(windows))]
+const NODE_PROCESS_NAME: &str = "node";
+
+/// 通过系统工具查找占用端口的进程 PID
+#[cfg(windows)]
 pub fn find_pid_on_port(port: u16) -> Option<u32> {
     let mut cmd = Command::new("netstat");
     cmd.args(["-ano", "-p", "tcp"]);
@@ -55,16 +62,60 @@ pub fn find_pid_on_port(port: u16) -> Option<u32> {
     }
     pids.pop()
 }
+#[cfg(not(windows))]
+pub fn find_pid_on_port(port: u16) -> Option<u32> {
+    // 优先 lsof（macOS / Linux 桌面发行版默认可用），-t 仅输出 PID
+    if let Ok(out) = Command::new("lsof")
+        .args(["-nP", "-iTCP", &format!(":{port}"), "-sTCP:LISTEN", "-t"])
+        .output()
+    {
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            if let Ok(p) = line.trim().parse::<u32>() {
+                return Some(p);
+            }
+        }
+    }
+    // 回退 ss（Linux iproute2）
+    #[cfg(target_os = "linux")]
+    if let Ok(out) = Command::new("ss").args(["-ltnp"]).output() {
+        let text = String::from_utf8_lossy(&out.stdout);
+        let needle = format!(":{}", port);
+        for line in text.lines() {
+            if line.contains(&needle) && line.contains("LISTEN") {
+                if let Some(idx) = line.find("pid=") {
+                    let rest = &line[idx + 4..];
+                    let pid_str: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
+                    if let Ok(p) = pid_str.parse::<u32>() {
+                        return Some(p);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
 
-/// 杀掉进程树（Windows taskkill /T /F）
+/// 杀掉进程树（Windows taskkill /T /F；Unix kill -KILL）
+#[cfg(windows)]
 pub fn kill_pid(pid: u32) -> bool {
     let mut cmd = Command::new("taskkill");
     cmd.args(["/PID", &pid.to_string(), "/T", "/F"]);
     no_window(&mut cmd);
     cmd.output().map(|o| o.status.success()).unwrap_or(false)
 }
+#[cfg(not(windows))]
+pub fn kill_pid(pid: u32) -> bool {
+    // Unix 上 dsh 服务为单进程，直接 SIGKILL 与 Windows /F 语义对齐；
+    // 若后续 dsh 派生子进程，可改为进程组管理（当前未设置 pgid）。
+    Command::new("kill")
+        .args(["-KILL", &pid.to_string()])
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
+}
 
-/// 查询进程可执行文件名（tasklist CSV），用于识别端口占用者是否为残留的 node 进程
+/// 查询进程可执行文件名，用于识别端口占用者是否为残留的 node 进程
+#[cfg(windows)]
 fn process_name(pid: u32) -> String {
     let mut cmd = Command::new("tasklist");
     cmd.args(["/FI", &format!("PID eq {}", pid), "/FO", "CSV", "/NH"]);
@@ -79,8 +130,19 @@ fn process_name(pid: u32) -> String {
         .map(|s| s.trim_matches('"').to_lowercase())
         .unwrap_or_default()
 }
+#[cfg(not(windows))]
+fn process_name(pid: u32) -> String {
+    // `ps -p PID -o comm=` 输出进程命令名（如 node），与 Windows tasklist 返回的
+    // 可执行名等价；返回小写以统一比较。
+    Command::new("ps")
+        .args(["-p", &pid.to_string(), "-o", "comm="])
+        .output()
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_lowercase().to_string())
+        .unwrap_or_default()
+}
 
-/// 端口监听快照（netstat 行），用于启动卡住时的诊断输出
+/// 端口监听快照，用于启动卡住时的诊断输出
+#[cfg(windows)]
 fn port_listen_lines(port: u16) -> String {
     let mut cmd = Command::new("netstat");
     cmd.args(["-ano", "-p", "tcp"]);
@@ -91,6 +153,38 @@ fn port_listen_lines(port: u16) -> String {
         .unwrap_or_default();
     let needle = format!(":{}", port);
     let lines: Vec<&str> = text.lines().filter(|l| l.contains(&needle)).collect();
+    if lines.is_empty() {
+        "(无匹配的监听行)".into()
+    } else {
+        lines[..lines.len().min(8)].join("\n")
+    }
+}
+#[cfg(not(windows))]
+fn port_listen_lines(port: u16) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    // lsof（macOS / Linux 桌面默认可用）
+    if let Ok(out) = Command::new("lsof")
+        .args(["-nP", "-iTCP", &format!(":{port}"), "-sTCP:LISTEN"])
+        .output()
+    {
+        for l in String::from_utf8_lossy(&out.stdout).lines() {
+            let t = l.trim();
+            if !t.is_empty() {
+                lines.push(t.to_string());
+            }
+        }
+    }
+    #[cfg(target_os = "linux")]
+    if lines.is_empty() {
+        if let Ok(out) = Command::new("ss").args(["-ltnp"]).output() {
+            let needle = format!(":{}", port);
+            for l in String::from_utf8_lossy(&out.stdout).lines() {
+                if l.contains(&needle) && l.contains("LISTEN") {
+                    lines.push(l.trim().to_string());
+                }
+            }
+        }
+    }
     if lines.is_empty() {
         "(无匹配的监听行)".into()
     } else {
@@ -127,12 +221,14 @@ fn port_holder_hint(port: u16) -> Option<String> {
 /// 端口已监听但 HTTP 不应答 → 防火墙开启且无放行规则 → UAC 提权添加放行规则。
 fn firewall_ensure(port: u16, app: &AppHandle) {
     if !crate::firewall::firewall_enabled() {
-        emit_log(
-            app,
-            "service:log",
-            "[防火墙] 系统防火墙未启用，端口不应被 Windows 防火墙拦截。若仍无法访问，请检查第三方安全软件（如 360、火绒等）的防火墙是否拦截了该端口。",
-            "dim",
+        #[cfg(windows)]
+        let msg: String = "[防火墙] 系统防火墙未启用，端口不应被 Windows 防火墙拦截。若仍无法访问，请检查第三方安全软件（如 360、火绒等）的防火墙是否拦截了该端口。".to_string();
+        #[cfg(not(windows))]
+        let msg: String = format!(
+            "[防火墙] 非 Windows 平台，未启用自动放行。若无法访问，请放行 TCP 端口 {}（firewalld: `sudo firewall-cmd --add-port={}/tcp`；ufw: `sudo ufw allow {}/tcp`），或检查第三方安全软件。",
+            port, port, port
         );
+        emit_log(app, "service:log", &msg, "dim");
         return;
     }
     if crate::firewall::rule_exists(port) {
@@ -178,6 +274,22 @@ pub fn start_impl(
     settings: &Settings,
 ) -> Result<(), String> {
     let port = settings.port;
+
+    // 局域网访问：确保 profile 的 webserver host 覆盖与端口一致（0.0.0.0）。
+    if let Err(e) = crate::net::set_webserver_patch(settings.allow_lan, port) {
+        emit_log(
+            app,
+            "service:log",
+            &format!("[局域网] 写入 webserver host 补丁失败：{}", e),
+            "err",
+        );
+    }
+
+    // 局域网访问：往 dsh 前端 dist 的 index.html 注入 crypto.randomUUID polyfill。
+    // 纯 HTTP + 非 loopback（如手机扫码 192.168.x.x）属浏览器不安全上下文，
+    // Crypto.randomUUID 缺失会让 dsh 前端多处抛 "crypto.randomUUID is not a function"。
+    crate::net::ensure_lan_polyfill(settings.allow_lan);
+
     if probe_http(port) {
         emit_log(app, "service:log", &format!("服务已在运行：{}", service_url(port)), "ok");
         let _ = app.emit(
@@ -200,7 +312,7 @@ pub fn start_impl(
             &format!("端口 {} 被进程占用（PID {}，{}）且未响应 HTTP", port, pid, if name.is_empty() { "未知" } else { &name }),
             "warn",
         );
-        if name == "node.exe" {
+        if name == NODE_PROCESS_NAME {
             emit_log(app, "service:log", "检测到残留的 Node 进程，自动清理后继续启动…", "step");
             if !kill_pid(pid) {
                 return Err(format!(
@@ -234,7 +346,18 @@ pub fn start_impl(
 
     let env = ensure_node(app, settings)?;
 
-    let mut penv = build_env(&[&env.node_dir]);
+    // 启动前清理 web profile 里误登记的模式型 bundle（如 dsh-TUI 与 dsh-web-app
+    // 的 storage/workspace 等行冲突，会导致 dsh 启动报 duplicate loader entry id）
+    if let Err(e) = crate::plugins::prune_web_incompatible_bundles() {
+        emit_log(
+            app,
+            "service:log",
+            &format!("[插件] 清理 web profile 中不兼容的插件失败：{}", e),
+            "warn",
+        );
+    }
+
+    let mut penv = build_env(&[&env.path_dir]);
     penv.insert("npm_config_registry".into(), settings.registry.clone());
     // 直接执行缓存包的入口 JS，并把 Node 锁死为便携版 v22：
     // npx 的 .cmd 脚本会回退到 PATH 里的系统 Node（如 v18 缺 parseEnv 崩溃），不能用，
@@ -247,12 +370,22 @@ pub fn start_impl(
         "使用本地缓存的 dsh 运行时（便携版 Node）直接启动…",
         "dim",
     );
-    let cmd_args: Vec<String> = vec![
+    let mut cmd_args: Vec<String> = vec![
         bin.to_string_lossy().into_owned(),
         "web".into(),
         "--port".into(),
         port.to_string(),
     ];
+    // 局域网访问开启时，把本机每个局域网 IPv4 显式登记为 dsh 可信主机。
+    // 单靠 0.0.0.0 绑定 + dsh 自动推导 LAN IP 不可靠（一次性采样、与启动时序竞争），
+    // 导致用 LAN IP 访问时 /api 被 isTrustedApiRequest 拦截、功能不可用。
+    // --trusted-host 接受 bare host（无端口），匹配任意端口，正好覆盖 LAN IP:port。
+    if settings.allow_lan {
+        for ip in crate::net::lan_ipv4_addresses() {
+            cmd_args.push("--trusted-host".into());
+            cmd_args.push(ip);
+        }
+    }
 
     let mut cmd = Command::new(&env.node_exe);
     cmd.args(&cmd_args);
@@ -344,18 +477,23 @@ pub fn start_impl(
         if !diagnosed && started.elapsed() >= Duration::from_secs(30) {
             diagnosed = true;
             let snapshot = port_listen_lines(port);
-            emit_log(app, "service:log", "[诊断] 端口监听快照（netstat）：", "warn");
+            emit_log(app, "service:log", "[诊断] 端口监听快照：", "warn");
             for line in snapshot.lines() {
                 let l = line.trim();
                 if !l.is_empty() {
                     emit_log(app, "service:log", l, "dim");
                 }
             }
-            if snapshot.contains("LISTENING") {
+            // Windows netstat 输出 LISTENING，Unix lsof/ss 输出 LISTEN，均含子串 "LISTEN"
+            if snapshot.contains("LISTEN") {
+                #[cfg(windows)]
+                let detail = "可能是 Windows 防火墙拦截了入站连接，或 dsh 启动过程被网络请求阻塞。将自动检测防火墙并尝试放行端口。";
+                #[cfg(not(windows))]
+                let detail = "可能是系统防火墙（firewalld/ufw 等）或安全软件拦截了入站连接，或 dsh 启动过程被网络请求阻塞。";
                 emit_log(
                     app,
                     "service:log",
-                    "[诊断] 端口已监听但 HTTP 不应答：可能是 Windows 防火墙拦截了入站连接，或 dsh 启动过程被网络请求阻塞。将自动检测防火墙并尝试放行端口。",
+                    &format!("[诊断] 端口已监听但 HTTP 不应答：{}", detail),
                     "warn",
                 );
                 // 后台检测防火墙：开启且无放行规则时，通过 UAC 提权添加规则放行该端口

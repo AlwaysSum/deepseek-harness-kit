@@ -120,7 +120,8 @@ pub fn build_env(extra_paths: &[&Path]) -> HashMap<String, String> {
     for p in extra_paths {
         if let Some(s) = p.to_str() {
             path.push_str(s);
-            path.push(';');
+            // PATH 分隔符：Windows 用 ';'，Unix 用 ':'，否则会把 PATH 拼成单条非法路径
+            path.push(if cfg!(windows) { ';' } else { ':' });
         }
     }
     path.push_str(&sys_path);
