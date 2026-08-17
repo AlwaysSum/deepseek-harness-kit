@@ -4,20 +4,49 @@
 [DeepSeek Harness](https://gitcode.com/gh_mirrors/de/deepseek-harness)（GitCode 镜像仓库），
 免去手动装环境、克隆、安装依赖、构建的繁琐步骤。
 
-[![GitHub Stars](https://img.shields.io/github/stars/AlwaysSum/deepseek-harness-kit)](https://github.com/AlwaysSum/deepseek-harness-kit)
-[![GitHub Forks](https://img.shields.io/github/forks/AlwaysSum/deepseek-harness-kit)](https://github.com/AlwaysSum/deepseek-harness-kit)
-[![GitHub Release](https://img.shields.io/github/v/release/AlwaysSum/deepseek-harness-kit)](https://github.com/AlwaysSum/deepseek-harness-kit/releases)
-[![GitHub Downloads](https://img.shields.io/github/downloads/AlwaysSum/deepseek-harness-kit/total)](https://github.com/AlwaysSum/deepseek-harness-kit/releases)
-[![Windows](https://img.shields.io/badge/Windows-10%2F11-0078D6?logo=windows&logoColor=white)](https://github.com/AlwaysSum/deepseek-harness-kit/releases)
-[![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?logo=tauri&logoColor=white)](https://tauri.app)
-[![Rust](https://img.shields.io/badge/Rust-2021-orange?logo=rust&logoColor=white)](https://www.rust-lang.org)
-[![Vite](https://img.shields.io/badge/Vite-6-646CFF?logo=vite&logoColor=white)](https://vitejs.dev)
+## 界面效果图
 
-## Star 增长趋势
+### 启动与环境检测
 
-仓库收藏（Star）增长曲线，数据实时更新：
+一键部署 / 启动时自动检测 Node.js 与 dsh 运行时，版本不符或缺失时自动下载便携版 Node，日志实时滚动：
 
-![Star History Chart](https://api.star-history.com/svg?repos=AlwaysSum/deepseek-harness-kit&type=Date&theme=light)
+![一键启动和环境检测](docs/assets/一键启动和环境检测.png)
+
+服务就绪后，主界面左侧为控制台，中间直接内嵌 DeepSeek Harness Web UI：
+
+![启动后效果图](docs/assets/启动后效果图.png)
+
+### 技能广场与技能调用
+
+技能广场：浏览 / 搜索技能广场（skillhub.cn 数据源），一键安装技能与专家：
+
+![技能广场](docs/assets/技能广场.png)
+
+在 Harness 对话中输入 `/` 呼出技能候选菜单，选择已安装技能后技能指令自动注入对话：
+
+![skills调用](docs/assets/skills调用.png)
+
+### 插件市场与内置插件
+
+插件市场：「本地插件 / 在线搜索 / 外部内置插件」三个 Tab，可启停内置插件、从 GitHub / npm 搜索安装新插件：
+
+![插件市场](docs/assets/插件市场.png)
+
+文件列表插件：侧边栏工作区改「会话 / 文件」双 Tab，文件 Tab 以文件树浏览当前会话工作区，点击文件后中间变为「对话 | 文件A | 文件B …」多 Tab 编辑（代码高亮、JSON / MD / HTML 预览、图片视频等）：
+
+![文件树和编辑插件](docs/assets/文件树和编辑插件.png)
+
+### 主题换肤
+
+主题换肤：覆盖品牌色 / 底色 / 边框 / 文字等令牌色，并支持背景图（含 GIF / APNG / 动态 WebP）与背景视频（MP4 / WebM / OGG）：
+
+![主题换肤支持背景图动态图和视频](docs/assets/主题换肤支持背景图动态图和视频.png)
+
+背景图效果，以及动态背景图的实际演示：
+
+![背景图效果](docs/assets/背景图效果.png)
+
+![背景图动态](docs/assets/背景图动态.gif)
 
 ## 功能
 
@@ -123,3 +152,14 @@ npm run tauri build  # 打包（NSIS 安装包输出到 src-tauri/target/release
 - 上游项目：DeepSeek Harness — [GitHub](https://github.com/deepseek-ai/deepseek-harness) / [GitCode 镜像](https://gitcode.com/gh_mirrors/de/deepseek-harness)
 - 本仓库发布页：GitHub [Releases](https://github.com/AlwaysSum/deepseek-harness-kit/releases) / GitCode [Releases](https://gitcode.com/Sunflower816/deepseek-harness-kit/releases)
 - Star 趋势图：[star-history.com](https://star-history.com/#AlwaysSum/deepseek-harness-kit&Date)
+
+## Star History
+
+
+<a href="https://www.star-history.com/?repos=AlwaysSum%2Fdeepseek-harness-kit&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=AlwaysSum/deepseek-harness-kit&type=date&theme=dark&legend=top-left&sealed_token=pSThRI5jpPdAgZv9eExPnotL8eaaeDAcrQcZUEehfhGRDkRd0Mde8K9udcSndqia8lzvOUchngVz70l95aYFVlM4zr7iujXF92CPahT-K00JNhqOApNEmA" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=AlwaysSum/deepseek-harness-kit&type=date&legend=top-left&sealed_token=pSThRI5jpPdAgZv9eExPnotL8eaaeDAcrQcZUEehfhGRDkRd0Mde8K9udcSndqia8lzvOUchngVz70l95aYFVlM4zr7iujXF92CPahT-K00JNhqOApNEmA" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=AlwaysSum/deepseek-harness-kit&type=date&legend=top-left&sealed_token=pSThRI5jpPdAgZv9eExPnotL8eaaeDAcrQcZUEehfhGRDkRd0Mde8K9udcSndqia8lzvOUchngVz70l95aYFVlM4zr7iujXF92CPahT-K00JNhqOApNEmA" />
+ </picture>
+</a>
